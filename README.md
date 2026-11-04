@@ -24,4 +24,4 @@ cargo test --workspace
 
 ## License
 
-Dual-licensed under MIT OR Apache-2.0 (license files to follow).
+Licensed under GPL-3.0-or-later — see [LICENSE](LICENSE).
