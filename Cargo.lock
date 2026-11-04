@@ -2287,7 +2287,13 @@ dependencies = [
 name = "omt-convert"
 version = "0.1.0"
 dependencies = [
+ "omt-bedrock",
+ "omt-java",
  "omt-nbt",
+ "omt-world",
+ "rayon",
+ "ron",
+ "serde",
  "thiserror 2.0.21",
 ]
 

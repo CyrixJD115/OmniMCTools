@@ -21,6 +21,12 @@ pub enum ConvertError {
         field: &'static str,
         detail: String,
     },
+
+    #[error("legacy (pre-1.18) chunk layout: {0}")]
+    LegacyChunk(&'static str),
+
+    #[error("world store: {0}")]
+    Store(String),
 }
 
 pub type Result<T> = std::result::Result<T, ConvertError>;

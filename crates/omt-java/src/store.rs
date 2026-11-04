@@ -99,11 +99,10 @@ impl JavaWorld {
             Err(_) => return Ok(out),
         };
         for entry in entries.flatten() {
-            if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
-                if name.ends_with(".dat") {
+            if let Some(name) = entry.path().file_name().and_then(|n| n.to_str())
+                && name.ends_with(".dat") {
                     out.push(name.trim_end_matches(".dat").to_string());
                 }
-            }
         }
         out.sort();
         Ok(out)
@@ -182,39 +181,12 @@ pub fn nbt_to_chunk(dim: u8, x: i32, z: i32, nbt: &Nbt) -> WorldResult<Chunk> {
     Ok(chunk)
 }
 
-/// Unpack Java's MSB-first packed `data` long array (4096 values).
-pub fn unpack_java_indices(packed: &[i64], palette_len: usize) -> Vec<u16> {
-    let bits = java_index_bits(palette_len);
-    if bits == 0 || packed.is_empty() {
-        return vec![0u16; 4096];
-    }
-    let mut out = Vec::with_capacity(4096);
-    let mut value_bits = 0u32;
-    let mut acc: u64 = 0;
-    for &l in packed {
-        let word = l as u64;
-        acc |= word << value_bits;
-        value_bits += 64;
-        while value_bits >= bits && out.len() < 4096 {
-            out.push((acc & ((1u64 << bits) - 1)) as u16);
-            acc >>= bits;
-            value_bits -= bits;
-        }
-    }
-    out.resize(4096, 0);
-    out
-}
-
-fn java_index_bits(palette_len: usize) -> u32 {
-    if palette_len <= 1 {
-        return 0;
-    }
-    let mut bits = 4u32; // vanilla minimum
-    while (1usize << bits) < palette_len && bits < 16 {
-        bits += 1;
-    }
-    bits
-}
+/// Unpack Java's non-spanning packed `data` long array (4096 values).
+/// Shared implementation moved to `omt_world::packing` (2026-11-04) so the
+/// converter and the store cannot drift; the old local copy used the
+/// pre-1.16 continuous-stream layout and was wrong for every supported
+/// world (latent until a real Java fixture existed).
+pub use omt_world::packing::unpack_java_indices;
 
 impl WorldStore for JavaWorld {
     fn read_chunk(&self, dim: u8, x: i32, z: i32) -> WorldResult<Option<Chunk>> {

@@ -98,13 +98,12 @@ pub enum DbKey<'a> {
 /// Decode a database key into a typed view. Returns `Other` for non-chunk
 /// keys rather than erroring — the LevelDB browser needs to show everything.
 pub fn decode_key(key: &[u8]) -> DbKey<'_> {
-    if let Some(rest) = key.strip_prefix(ACTOR_PREFIX) {
-        if rest.len() == 8 {
+    if let Some(rest) = key.strip_prefix(ACTOR_PREFIX)
+        && rest.len() == 8 {
             let mut id = [0u8; 8];
             id.copy_from_slice(rest);
             return DbKey::Actor { id };
         }
-    }
     if key == b"~local_player" {
         return DbKey::LocalPlayer;
     }

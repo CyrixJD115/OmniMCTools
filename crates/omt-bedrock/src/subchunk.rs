@@ -227,11 +227,10 @@ impl Subchunk {
         }
         let mut r = Reader::with_offset(buf, ByteOrder::Little, 2);
         let y = if version >= 9 { r.u8()? as i8 } else { 0 };
-        if let Some(ky) = key_y {
-            if version >= 9 && y != ky {
+        if let Some(ky) = key_y
+            && version >= 9 && y != ky {
                 return Err(SubchunkError::YMismatch { key: ky, payload: y });
             }
-        }
         let mut storages = Vec::with_capacity(storage_count as usize);
         for _ in 0..storage_count {
             storages.push(parse_storage(&mut r)?);
@@ -408,7 +407,7 @@ pub fn unpack_bits(raw: &[u8], bits: u8) -> Vec<u16> {
     let vpw = 32 / bits;
     let mask = (1u32 << bits) - 1;
     let mut out = Vec::with_capacity(4096);
-    for chunk in raw.chunks_exact(4) {
+    for chunk in raw.as_chunks::<4>().0 {
         let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         for j in 0..vpw {
             out.push(((word >> (j * bits)) & mask) as u16);
@@ -435,7 +434,7 @@ pub fn pack_bits(out: &mut Vec<u8>, values: &[u16], bits: u8) {
     let words = 4096usize.div_ceil(vpw);
     out.resize(out.len() + words * 4, 0);
     let start = out.len() - words * 4;
-    for (i, chunk) in out[start..].chunks_exact_mut(4).enumerate() {
+    for (i, chunk) in out[start..].as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let mut word = 0u32;
         for j in 0..vpw {
             let idx = i * vpw + j;

@@ -24,7 +24,7 @@ impl BedrockWorld {
     /// Open read-only — browsing, inspecting, converting. Never mutates.
     pub fn open_read_only(root: &Path) -> WorldResult<Self> {
         let level_bytes = std::fs::read(root.join("level.dat"))
-            .map_err(|e| WorldError::Io(e))
+            .map_err(WorldError::Io)
             .map_err(|e| WorldError::Corrupt { context: "level.dat".into(), source: Box::new(e) })?;
         let level_dat = BedrockLevelDat::parse(&level_bytes)
             .map_err(|e| WorldError::Corrupt { context: "level.dat".into(), source: Box::new(e) })?;
@@ -43,9 +43,43 @@ impl BedrockWorld {
         self.db.lock().expect("leveldb mutex poisoned")
     }
 
+    /// Open writable — converter write paths (M3). Mutates the world: pair
+    /// with the copy-on-open workflow (copy the world folder first).
+    pub fn open_writable(root: &Path) -> WorldResult<Self> {
+        let level_bytes = std::fs::read(root.join("level.dat"))
+            .map_err(WorldError::Io)
+            .map_err(|e| WorldError::Corrupt { context: "level.dat".into(), source: Box::new(e) })?;
+        let level_dat = BedrockLevelDat::parse(&level_bytes)
+            .map_err(|e| WorldError::Corrupt { context: "level.dat".into(), source: Box::new(e) })?;
+        let db = Db::open(
+            root.join("db"),
+            OpenOptions { read_only: false, ..Default::default() },
+        )
+        .map_err(|e| WorldError::Store(format!("leveldb open: {e}")))?;
+        let levelname = std::fs::read_to_string(root.join("levelname.txt"))
+            .ok()
+            .map(|s| s.trim_start_matches('\u{feff}').trim_end().to_string());
+        Ok(Self { root: root.to_path_buf(), level_dat, levelname, db: Mutex::new(db) })
+    }
+
     /// Raw point-read of any database key (LevelDB browser, tests).
     pub fn raw_get(&self, key: &[u8]) -> WorldResult<Option<Vec<u8>>> {
         self.get(key)
+    }
+
+    /// Raw batched put of arbitrary key/value pairs (converter write path).
+    /// The caller owns key layout (`omt_bedrock::keys` builders).
+    pub fn raw_put_many(&self, kvs: &[(Vec<u8>, Vec<u8>)]) -> WorldResult<()> {
+        if kvs.is_empty() {
+            return Ok(());
+        }
+        let mut batch = WriteBatch::new();
+        for (k, v) in kvs {
+            batch.put(k.clone(), v.clone());
+        }
+        self.db()
+            .write(batch, WriteOptions::default())
+            .map_err(|e| WorldError::Store(format!("leveldb write: {e}")))
     }
 
     fn get(&self, key: &[u8]) -> WorldResult<Option<Vec<u8>>> {
@@ -68,11 +102,10 @@ impl BedrockWorld {
                 DbKey::Subchunk { x, z, dim: d, .. } if d == dim => {
                     found.insert((x, z));
                 }
-                DbKey::ChunkRecord { x, z, dim: d, tag: t, .. } if d == dim => {
-                    if t == tag::VERSION || t == tag::DATA_3D || t == tag::FINALIZED_STATE {
+                DbKey::ChunkRecord { x, z, dim: d, tag: t, .. } if d == dim
+                    && (t == tag::VERSION || t == tag::DATA_3D || t == tag::FINALIZED_STATE) => {
                         found.insert((x, z));
                     }
-                }
                 _ => {}
             }
         }
@@ -161,10 +194,16 @@ impl BedrockWorld {
                     y,
                     Slice {
                         palette: storage.palette.clone(),
+                        // Normalize Bedrock's on-disk XZY order into the
+                        // universal model's YZX (see omt_world::packing);
+                        // without this, block_at read transposed blocks.
                         indices: storage
                             .indices
-                            .clone()
-                            .unwrap_or_else(|| vec![0u16; 4096]),
+                            .as_ref()
+                            .map_or_else(
+                                || vec![0u16; 4096],
+                                |ix| omt_world::packing::permute_xzy_to_yzx(ix),
+                            ),
                     },
                 );
             }
@@ -198,14 +237,13 @@ impl BedrockWorld {
 
         // Actors: digp → actor ids → actorprefix NBT.
         if let Some(digp) = self.get(&keys::digp_key(x, z, dim))? {
-            for id_bytes in digp.chunks_exact(8) {
+            for id_bytes in digp.as_chunks::<8>().0 {
                 let mut id = [0u8; 8];
                 id.copy_from_slice(id_bytes);
-                if let Some(raw) = self.get(&keys::actor_key(id))? {
-                    if let Ok(nbt) = omt_nbt::read(&raw, ByteOrder::Little) {
+                if let Some(raw) = self.get(&keys::actor_key(id))?
+                    && let Ok(nbt) = omt_nbt::read(&raw, ByteOrder::Little) {
                         chunk.entities.push(nbt.tag);
                     }
-                }
             }
         }
 

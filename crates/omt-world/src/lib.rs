@@ -5,10 +5,15 @@
 //! (Y −64..319), so no height shifting exists anywhere in the tool.
 
 pub mod detect;
+pub mod packing;
 pub mod path;
 pub mod store;
 
 pub use detect::{detect, Detected, WorldSummary, WorldSource};
+pub use packing::{
+    permute_xzy_to_yzx, permute_yzx_to_xzy, unpack_java_biome_cells, unpack_java_heightmap,
+    unpack_java_indices, unpack_java_packed,
+};
 pub use path::VPath;
 pub use store::{WorldError, WorldNode, WorldResult, WorldStore};
 
@@ -89,8 +94,11 @@ impl BlockState {
 }
 
 /// One 16×16 block layer of a chunk column (either a Java section or one
-/// Bedrock subchunk Y-slice of 16). `indices` has 4096 entries in
-/// YZX order (matches both editions' on-disk order).
+/// Bedrock subchunk Y-slice of 16). `indices` has 4096 entries in **YZX**
+/// order (`y << 8 | z << 4 | x`) — the Java order and the universal model's
+/// order. Bedrock's on-disk XZY order is normalized at the store boundary
+/// (see `packing`); it used to be copied in verbatim, which silently broke
+/// `Chunk::block_at` for Bedrock reads (fixed 2026-11-04).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Slice {
     pub palette: Vec<BlockState>,

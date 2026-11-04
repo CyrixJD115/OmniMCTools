@@ -7,6 +7,12 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+omt-world.workspace = true
+omt-bedrock.workspace = true
+omt-java.workspace = true
+rayon = "1"
+ron = "0.8"
+serde.workspace = true
 omt-nbt.workspace = true
 thiserror.workspace = true
 

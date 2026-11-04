@@ -18,13 +18,25 @@
 //!   (findings Task C).
 //! - [`items`] — Java item stacks (`tag` and 1.20.5+ `components` eras) ⇄
 //!   Bedrock item stacks, with per-field loss reporting (findings Task A).
+//! - [`rules`] — the OMT-owned conversion rule table (RON), seeded with the
+//!   fixture-derived biome ids and block-palette version.
+//! - [`chunk_java`] — Java chunk → conversion sidecar (modern era).
+//! - [`chunk_bedrock`] — sidecar → raw Bedrock LevelDB records.
+//! - [`pipeline`] — rayon per-chunk `read → parse → remap → serialize` and
+//!   the apply step (M3 converter core).
 
+pub mod chunk_bedrock;
+pub mod chunk_java;
 pub mod entities;
 pub mod error;
 pub mod items;
 pub mod loss;
+pub mod pipeline;
 pub mod proto;
+pub mod rules;
 
+pub use chunk_bedrock::{ChunkConversion, ChunkWrites, java_chunk_to_bedrock};
+pub use chunk_java::{JavaBiomes, JavaChunk, JavaSection, parse_java_chunk};
 pub use entities::{entities_key, entity_region_root, find_entities};
 pub use error::{ConvertError, Result};
 pub use items::{
@@ -32,4 +44,8 @@ pub use items::{
     java_stack_to_bedrock,
 };
 pub use loss::{ConversionReport, Loss, LossKind};
+pub use pipeline::{
+    ChunkOutcome, ConvertOptions, DimensionOutcome, apply_conversions, convert_java_chunks,
+};
 pub use proto::{ChunkEra, ProtoFilter, SKIP_PROTO_CHUNKS_DEFAULT, is_proto_chunk};
+pub use rules::{BlockRule, RegistryRules, load_rules};
