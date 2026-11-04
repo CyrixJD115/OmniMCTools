@@ -1,0 +1,15 @@
+[package]
+name = "omt-world"
+description = "Shared world domain: editions, chunks/slices, WorldStore trait, virtual path namespace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-nbt.workspace = true
+omt-versions.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

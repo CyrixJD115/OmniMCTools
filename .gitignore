@@ -1,0 +1,8 @@
+/target
+# Never commit real worlds or RE artifacts into the product repo.
+/tools/world-fixtures/*
+!/tools/world-fixtures/README.md
+*.mcworld
+*.mctemplate
+*.omt_backup
+.omt-workspace/

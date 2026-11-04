@@ -1,2 +1,27 @@
-# OmniMCTools
-OmniMCTools (OMT) - a free, open-source Minecraft world tool suite for Java &amp; Bedrock. Browse, edit, convert and prune worlds. Clean-room Rust, inspired by UMT.
+# OmniMCTools (OMT)
+
+A free, open-source Minecraft world tool suite for **Java & Bedrock Edition** (current stable versions, Windows + Android world sources): world browser, NBT editor, Java⇄Bedrock converter, world pruner, LevelDB browser, and a Lua extension system.
+
+Native Rust. Clean-room implementation inspired by [Universal Minecraft Tool](https://universalminecrafttool.com) (UMT) — **not affiliated with UMT and not a fork**; no UMT code or data is used.
+
+## Status
+
+Early development. Complete so far (see [PLAN.md](PLAN.md) for the full roadmap and progress ledger):
+
+- **NBT** — big/little-endian codec, SNBT parser + serializer, undo/redo edit engine, format-preserving safe saves with automatic backups
+- **World I/O** — Bedrock (LevelDB, byte-exact subchunk/data3D codecs) and Java (Anvil regions, level.dat, playerdata)
+- **Converter groundwork** — Java⇄Bedrock item-stack conversion with explicit loss reporting, chunk-filter predicates
+- **Apps** — `omt` CLI (`inspect`/`nbt`/`chunks`/`chunk`/`ldb`/`convert`) and an Iced GUI with a tabbed NBT tree editor
+
+## Build
+
+Requires Rust 1.88+.
+
+```sh
+cargo build --workspace
+cargo test --workspace
+```
+
+## License
+
+Dual-licensed under MIT OR Apache-2.0 (license files to follow).

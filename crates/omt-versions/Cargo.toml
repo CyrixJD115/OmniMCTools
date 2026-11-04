@@ -1,0 +1,15 @@
+[package]
+name = "omt-versions"
+description = "The two-constant-per-release version registry (PLAN.md §2) and its loader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+ron.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

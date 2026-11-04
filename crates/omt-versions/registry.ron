@@ -1,0 +1,13 @@
+(
+    // Bedrock pins derived from the supplied `world_ref` fixtures
+    // (level.dat lastOpenedWithVersion = 1.26.52.3.0, storage version 10).
+    // Java pins are provisional until M3 pins a client.jar (PLAN.md §7);
+    // the enforced floor (2865 = 1.18) is what gates reads today.
+    java_data_version: 4440,
+    java_release: "26.2",
+    java_min_data_version: 2865,
+    bedrock_level_version: (1, 26, 52, 3, 0),
+    bedrock_subchunk_palette: 9,
+    bedrock_release: "1.26.52",
+    bedrock_min_chunk_version: 40,
+)

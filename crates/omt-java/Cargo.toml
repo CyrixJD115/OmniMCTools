@@ -1,0 +1,18 @@
+[package]
+name = "omt-java"
+description = "Java Edition world formats: Anvil regions, level.dat, dimensions, playerdata"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-nbt.workspace = true
+omt-world.workspace = true
+omt-versions.workspace = true
+thiserror.workspace = true
+crc32fast.workspace = true
+flate2.workspace = true
+
+[lints]
+workspace = true

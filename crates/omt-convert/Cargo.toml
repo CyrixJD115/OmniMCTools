@@ -1,0 +1,14 @@
+[package]
+name = "omt-convert"
+description = "Java <-> Bedrock conversion primitives: item stacks, proto-chunk filtering, entity-region assembly (M3/M4 groundwork)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-nbt.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

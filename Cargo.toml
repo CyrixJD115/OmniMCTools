@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+omt-nbt = { path = "crates/omt-nbt" }
+omt-world = { path = "crates/omt-world" }
+omt-versions = { path = "crates/omt-versions" }
+omt-bedrock = { path = "crates/omt-bedrock" }
+omt-java = { path = "crates/omt-java" }
+omt-convert = { path = "crates/omt-convert" }
+omt-cli = { path = "crates/omt-cli" }
+omt-gui = { path = "crates/omt-gui" }
+
+flate2 = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ron = "0.8"
+clap = { version = "4", features = ["derive"] }
+iced = "0.14"
+bedrock-leveldb = "0.3"
+crc32fast = "1"
+rfd = "0.17"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

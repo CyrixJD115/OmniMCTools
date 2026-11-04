@@ -1,0 +1,17 @@
+[package]
+name = "omt-bedrock"
+description = "Bedrock world storage: LevelDB store, key codec, subchunk codec, level.dat"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-nbt.workspace = true
+omt-world.workspace = true
+omt-versions.workspace = true
+bedrock-leveldb.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

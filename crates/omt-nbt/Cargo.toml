@@ -1,0 +1,18 @@
+[package]
+name = "omt-nbt"
+description = "NBT parsing/serialization for OmniMCTools: big- and little-endian, gzip/zlib/raw containers, Bedrock level.dat header, SNBT output"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+flate2.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

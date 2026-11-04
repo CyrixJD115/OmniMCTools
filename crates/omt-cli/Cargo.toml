@@ -1,0 +1,24 @@
+[package]
+name = "omt-cli"
+description = "The `omt` command-line application: inspect/nbt/convert… (grows every milestone)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "omt"
+path = "src/main.rs"
+
+[dependencies]
+omt-nbt.workspace = true
+omt-convert.workspace = true
+omt-world.workspace = true
+omt-bedrock.workspace = true
+omt-java.workspace = true
+omt-versions.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

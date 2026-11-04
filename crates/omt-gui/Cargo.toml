@@ -1,0 +1,21 @@
+[package]
+name = "omt-gui"
+description = "OmniMCTools desktop GUI (Iced)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "omt-gui"
+path = "src/main.rs"
+
+[dependencies]
+omt-nbt.workspace = true
+omt-world.workspace = true
+omt-versions.workspace = true
+iced.workspace = true
+rfd = "0.17"
+
+[lints]
+workspace = true
