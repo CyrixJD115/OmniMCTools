@@ -11,6 +11,7 @@ pub mod store;
 
 pub use detect::{detect, Detected, WorldSummary, WorldSource};
 pub use packing::{
+    pack_java_biome_cells, pack_java_heightmap, pack_java_indices, pack_java_packed,
     permute_xzy_to_yzx, permute_yzx_to_xzy, unpack_java_biome_cells, unpack_java_heightmap,
     unpack_java_indices, unpack_java_packed,
 };

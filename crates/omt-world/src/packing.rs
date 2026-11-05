@@ -99,6 +99,51 @@ pub fn unpack_java_heightmap(packed: &[i64]) -> Vec<u16> {
     unpack_java_packed(packed, 256, 9)
 }
 
+/// Pack `values` entries at `bits` width into Java's non-spanning layout:
+/// entry *i* lives in long `i / (64/bits)` at shift `(i % (64/bits)) * bits`,
+/// LSB-first; longs are padded with zero high bits. The inverse of
+/// [`unpack_java_packed`] (verified by round-trip tests below). Values are
+/// truncated to `bits` width.
+pub fn pack_java_packed(values: &[u16], bits: u32) -> Vec<i64> {
+    if bits == 0 || values.is_empty() {
+        return Vec::new();
+    }
+    let bits = bits as usize;
+    let per_long = 64 / bits;
+    let mask = ((1u64 << bits) - 1) as i64;
+    let mut out = vec![0i64; values.len().div_ceil(per_long)];
+    for (i, &v) in values.iter().enumerate() {
+        out[i / per_long] |= (v as i64 & mask) << ((i % per_long) * bits);
+    }
+    out
+}
+
+/// Pack a Java block-state `data` long array from 4096 palette indices
+/// (YZX order, already in Java order — no permutation here).
+pub fn pack_java_indices(indices: &[u16], palette_len: usize) -> Vec<i64> {
+    let bits = java_block_bits(palette_len);
+    if bits == 0 {
+        return Vec::new(); // palette ≤ 1 ⇒ `data` omitted (all palette[0])
+    }
+    pack_java_packed(indices, bits)
+}
+
+/// Pack a Java per-section biome `data` long array (64 cells, index
+/// `(y << 4) | (z << 2) | x`).
+pub fn pack_java_biome_cells(cells: &[u16], palette_len: usize) -> Vec<i64> {
+    let bits = java_biome_bits(palette_len);
+    if bits == 0 {
+        return Vec::new();
+    }
+    pack_java_packed(cells, bits)
+}
+
+/// Pack one Java `Heightmaps` entry: 256 columns at 9 bits → 37 longs,
+/// 7 values per long (LSB-first, non-spanning).
+pub fn pack_java_heightmap(values: &[u16]) -> Vec<i64> {
+    pack_java_packed(values, 9)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +196,55 @@ mod tests {
         let out = unpack_java_heightmap(&packed);
         assert_eq!(out[..9], [1, 2, 3, 4, 5, 6, 7, 8, 0]);
         assert_eq!(out.len(), 256);
+    }
+
+    #[test]
+    fn heightmap_pack_round_trips_37_longs() {
+        // Values exercising the 9-bit ceiling and a cross-long boundary.
+        let values: Vec<u16> = (0..256).map(|i| ((i * 13) % 385) as u16).collect();
+        let packed = pack_java_heightmap(&values);
+        assert_eq!(packed.len(), 37, "256 values at 7/long");
+        assert_eq!(unpack_java_heightmap(&packed), values);
+    }
+
+    #[test]
+    fn pack_is_non_spanning_like_unpack() {
+        // 16 values of 4 bits fill long 0 exactly; value 16 must land at
+        // bit 0 of long 1 (continuous packing would shift it into long 0's
+        // high half).
+        // 16 values of 4 bits fill long 0 exactly; the 17th value must land
+        // at bit 0 of long 1 (continuous packing would shift it into long
+        // 0's high half).
+        let mut values: Vec<u16> = (0..16).collect();
+        values.push(7);
+        let packed = pack_java_packed(&values, 4);
+        assert_eq!(packed[0] as u64, 0xfedc_ba98_7654_3210);
+        assert_eq!(packed[1], 7);
+        assert_eq!(packed.len(), 2);
+    }
+
+    #[test]
+    fn block_indices_pack_round_trips() {
+        let mut indices = vec![0u16; 4096];
+        for i in (0..4096).step_by(37) {
+            indices[i] = (i % 17) as u16;
+        }
+        let packed = pack_java_indices(&indices, 17); // 5 bits
+        assert_eq!(packed.len(), 4096 / 12 + 1);
+        assert_eq!(unpack_java_indices(&packed, 17), indices);
+        // Palette ≤ 1 ⇒ no data array at all.
+        assert!(pack_java_indices(&indices, 1).is_empty());
+        assert!(pack_java_biome_cells(&[0u16; 64], 1).is_empty());
+    }
+
+    #[test]
+    fn biome_cells_pack_round_trips() {
+        let mut cells = [0u16; 64];
+        for (i, c) in cells.iter_mut().enumerate() {
+            *c = (i % 3) as u16;
+        }
+        let packed = pack_java_biome_cells(&cells, 3); // 2 bits
+        assert_eq!(unpack_java_biome_cells(&packed, 3), cells.to_vec());
     }
 
     #[test]
