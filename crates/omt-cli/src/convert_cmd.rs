@@ -7,7 +7,9 @@
 use std::io::{IsTerminal, Read};
 
 use omt_convert::{
-    ConversionReport, ItemConvertOpts, StackEra, bedrock_stack_to_java, java_stack_to_bedrock,
+    ConversionReport, ItemConvertOpts, StackEra, apply_conversions, apply_java_conversions,
+    bedrock_stack_to_java, convert_bedrock_chunks, convert_java_chunks, java_stack_to_bedrock,
+    load_rules,
 };
 use omt_nbt::Tag;
 use omt_nbt::snbt::{from_snbt, to_snbt_pretty};
@@ -39,15 +41,25 @@ enum Command {
         snbt: Option<String>,
     },
 
-    /// Convert Java chunk columns into an (existing) Bedrock world's
-    /// database. The Bedrock world must be a disposable copy: records of
-    /// converted columns are replaced.
+    /// Convert chunk columns between worlds, either direction
+    /// (`--to-bedrock` is the default, mirroring the item-stack command).
+    /// Record-bearing columns of the target are replaced — always convert
+    /// into a disposable copy of the source.
     Chunks {
-        /// Java world folder (source).
+        /// Convert a Java world into the Bedrock world (default).
+        #[arg(long, conflicts_with = "to_java")]
+        to_bedrock: bool,
+
+        /// Convert a Bedrock world into the Java world folder (`--java`
+        /// is the target; created when missing).
+        #[arg(long)]
+        to_java: bool,
+
+        /// Java world folder (source for --to-bedrock, target for --to-java).
         #[arg(long)]
         java: std::path::PathBuf,
 
-        /// Bedrock world folder (target; opened writable).
+        /// Bedrock world folder (target for --to-bedrock, source for --to-java).
         #[arg(long)]
         bedrock: std::path::PathBuf,
 
@@ -110,7 +122,14 @@ fn loss_tally(report: &omt_convert::ConversionReport) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    ToBedrock,
+    ToJava,
+}
+
 fn run_chunks(
+    to_java: bool,
     java: std::path::PathBuf,
     bedrock: std::path::PathBuf,
     dim: DimArg,
@@ -118,39 +137,68 @@ fn run_chunks(
     keep_proto: bool,
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use omt_convert::{ConvertOptions, apply_conversions, convert_java_chunks, load_rules};
-
-    let java = omt_java::JavaWorld::open(&java)?;
+    let direction = if to_java { Direction::ToJava } else { Direction::ToBedrock };
     let rules = match &rules {
         Some(path) => load_rules(path).map_err(|e| format!("rule table: {e}"))?,
         None => omt_convert::RegistryRules::default(),
     };
-    let opts = ConvertOptions {
+    let opts = omt_convert::ConvertOptions {
         filter: omt_convert::ProtoFilter::new(!keep_proto),
         rules,
     };
 
-    let mut outcome = convert_java_chunks(&java, dim.into(), &opts)?;
-
-    println!(
-        "chunks: {} converted, {} skipped (proto), {} failed",
-        outcome.converted.len(),
-        outcome.skipped_proto,
-        outcome.failed.len(),
-    );
-    for (x, z, err) in outcome.failed.iter().take(10) {
-        eprintln!("  failed ({x},{z}): {err}");
+    match direction {
+        Direction::ToBedrock => {
+            let java = omt_java::JavaWorld::open(&java)?;
+            let mut outcome = convert_java_chunks(&java, dim.into(), &opts)?;
+            println!("direction: Java → Bedrock");
+            println!(
+                "chunks: {} converted, {} skipped (proto), {} failed",
+                outcome.converted.len(),
+                outcome.skipped_proto,
+                outcome.failed.len(),
+            );
+            for (x, z, err) in outcome.failed.iter().take(10) {
+                eprintln!("  failed ({x},{z}): {err}");
+            }
+            if dry_run {
+                println!("dry run: target untouched");
+            } else {
+                use omt_world::WorldStore;
+                let mut target = omt_bedrock::BedrockWorld::open_writable(&bedrock)?;
+                let applied = apply_conversions(&target, dim.into(), &mut outcome)?;
+                target.flush().map_err(|e| format!("flush: {e}"))?;
+                println!("applied {applied} chunk columns to {}", bedrock.display());
+            }
+            println!("losses: {}", loss_tally(&outcome.merged_report()));
+        }
+        Direction::ToJava => {
+            let source = omt_bedrock::BedrockWorld::open_read_only(&bedrock)?;
+            let mut outcome = convert_bedrock_chunks(&source, dim.into(), &opts)?;
+            println!("direction: Bedrock → Java");
+            println!(
+                "chunks: {} converted, {} skipped (proto), {} failed",
+                outcome.converted.len(),
+                outcome.skipped_proto,
+                outcome.failed.len(),
+            );
+            for (x, z, err) in outcome.failed.iter().take(10) {
+                eprintln!("  failed ({x},{z}): {err}");
+            }
+            if dry_run {
+                println!("dry run: target untouched");
+            } else {
+                let applied = apply_java_conversions(
+                    &java,
+                    dim.into(),
+                    &mut outcome,
+                    source.levelname.as_deref(),
+                )?;
+                println!("applied {applied} chunk columns to {}", java.display());
+            }
+            println!("losses: {}", loss_tally(&outcome.merged_report()));
+        }
     }
-    if dry_run {
-        println!("dry run: target untouched");
-    } else {
-        use omt_world::WorldStore;
-        let mut target = omt_bedrock::BedrockWorld::open_writable(&bedrock)?;
-        let applied = apply_conversions(&target, dim.into(), &mut outcome)?;
-        target.flush().map_err(|e| format!("flush: {e}"))?;
-        println!("applied {applied} chunk columns to {}", bedrock.display());
-    }
-    println!("losses: {}", loss_tally(&outcome.merged_report()));
     Ok(())
 }
 
@@ -159,15 +207,8 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         Command::ItemStack { to_bedrock, to_java, legacy_java, snbt } => {
             run_item_stack(*to_bedrock, *to_java, *legacy_java, snbt)
         }
-        Command::Chunks { java, bedrock, dim, rules, keep_proto, dry_run } => {
-            run_chunks(
-                java.clone(),
-                bedrock.clone(),
-                *dim,
-                rules.clone(),
-                *keep_proto,
-                *dry_run,
-            )
+        Command::Chunks { to_java, java, bedrock, dim, rules, keep_proto, dry_run, .. } => {
+            run_chunks(*to_java, java.clone(), bedrock.clone(), *dim, rules.clone(), *keep_proto, *dry_run)
         }
     }
 }
