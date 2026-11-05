@@ -22,11 +22,14 @@
 //!   fixture-derived biome ids and block-palette version.
 //! - [`chunk_java`] — Java chunk → conversion sidecar (modern era).
 //! - [`chunk_bedrock`] — sidecar → raw Bedrock LevelDB records.
+//! - [`chunk_to_java`] — decoded Bedrock chunk → Java chunk NBT root (M3b,
+//!   the reverse direction).
 //! - [`pipeline`] — rayon per-chunk `read → parse → remap → serialize` and
-//!   the apply step (M3 converter core).
+//!   the apply step (M3 converter core), both directions.
 
 pub mod chunk_bedrock;
 pub mod chunk_java;
+pub mod chunk_to_java;
 pub mod entities;
 pub mod error;
 pub mod items;
@@ -37,6 +40,7 @@ pub mod rules;
 
 pub use chunk_bedrock::{ChunkConversion, ChunkWrites, java_chunk_to_bedrock};
 pub use chunk_java::{JavaBiomes, JavaChunk, JavaSection, parse_java_chunk};
+pub use chunk_to_java::{BedrockConversion, JavaChunkWrite, bedrock_chunk_to_java};
 pub use entities::{entities_key, entity_region_root, find_entities};
 pub use error::{ConvertError, Result};
 pub use items::{
@@ -45,7 +49,8 @@ pub use items::{
 };
 pub use loss::{ConversionReport, Loss, LossKind};
 pub use pipeline::{
-    ChunkOutcome, ConvertOptions, DimensionOutcome, apply_conversions, convert_java_chunks,
+    ChunkOutcome, ConvertOptions, DimensionOutcome, JavaDimensionOutcome, apply_conversions,
+    apply_java_conversions, convert_bedrock_chunks, convert_java_chunks,
 };
 pub use proto::{ChunkEra, ProtoFilter, SKIP_PROTO_CHUNKS_DEFAULT, is_proto_chunk};
 pub use rules::{BlockRule, RegistryRules, load_rules};

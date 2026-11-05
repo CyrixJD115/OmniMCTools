@@ -16,6 +16,19 @@ pub fn dimension_dir(root: &Path, dim: u8) -> PathBuf {
     }
 }
 
+/// Entity-region directory (1.18+ split), mirroring [`dimension_dir`]:
+/// overworld `entities/`, nether `DIM-1/entities/`, end `DIM1/entities/`.
+/// Container and compression are the same Anvil/zlib region format (wiki
+/// *Region file format*: scheme 2 is what the official client writes);
+/// entity-region specifics are pending the Java fixture (PLAN §7).
+pub fn entity_dimension_dir(root: &Path, dim: u8) -> PathBuf {
+    match Dimension::from_id(dim) {
+        Some(Dimension::Overworld) | None => root.join("entities"),
+        Some(Dimension::Nether) => root.join("DIM-1").join("entities"),
+        Some(Dimension::End) => root.join("DIM1").join("entities"),
+    }
+}
+
 pub struct JavaWorld {
     pub root: PathBuf,
     pub level_dat: Nbt,

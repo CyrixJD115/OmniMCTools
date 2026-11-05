@@ -2290,6 +2290,7 @@ dependencies = [
  "omt-bedrock",
  "omt-java",
  "omt-nbt",
+ "omt-versions",
  "omt-world",
  "rayon",
  "ron",

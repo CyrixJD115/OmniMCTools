@@ -10,6 +10,7 @@ license.workspace = true
 omt-world.workspace = true
 omt-bedrock.workspace = true
 omt-java.workspace = true
+omt-versions.workspace = true
 rayon = "1"
 ron = "0.8"
 serde.workspace = true

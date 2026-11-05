@@ -98,30 +98,37 @@ pub fn load_rules(path: &Path) -> Result<RegistryRules, crate::error::ConvertErr
 /// shipped in 1.16). Seed scope only — `registry-gen` (client.jar) will
 /// emit the complete current table; unknown names are loss-recorded and
 /// fall back to ocean, never guessed.
+///
+/// **The single source for both directions**: the Java→Bedrock map and the
+/// Bedrock→Java inverse are both derived from this one table, so they
+/// cannot drift apart. The inverse keeps the alphabetically-first name per
+/// Bedrock id (`snowy_plains` beats the `snowy_tundra` alias, `badlands`
+/// beats `mesa`) — deterministic, and the aliases remain forward-mappable.
+const SEED_BIOME_IDS: &[(&str, i32)] = &[
+    ("minecraft:ocean", 0),
+    ("minecraft:plains", 1),
+    ("minecraft:desert", 2),
+    ("minecraft:extreme_hills", 3),
+    ("minecraft:forest", 4),
+    ("minecraft:taiga", 5),
+    ("minecraft:swamp", 6),
+    ("minecraft:river", 7),
+    ("minecraft:frozen_ocean", 10),
+    ("minecraft:frozen_river", 11),
+    ("minecraft:snowy_tundra", 12),
+    ("minecraft:snowy_plains", 12),
+    ("minecraft:mushroom_fields", 14),
+    ("minecraft:beach", 16),
+    ("minecraft:jungle", 19),
+    ("minecraft:jungle_hills", 22),
+    ("minecraft:deep_ocean", 24),
+    ("minecraft:savanna", 35),
+    ("minecraft:badlands", 37),
+    ("minecraft:mesa", 37),
+];
+
 fn seed_biome_ids() -> BTreeMap<String, i32> {
-    const SEED: &[(&str, i32)] = &[
-        ("minecraft:ocean", 0),
-        ("minecraft:plains", 1),
-        ("minecraft:desert", 2),
-        ("minecraft:extreme_hills", 3),
-        ("minecraft:forest", 4),
-        ("minecraft:taiga", 5),
-        ("minecraft:swamp", 6),
-        ("minecraft:river", 7),
-        ("minecraft:frozen_ocean", 10),
-        ("minecraft:frozen_river", 11),
-        ("minecraft:snowy_tundra", 12),
-        ("minecraft:snowy_plains", 12),
-        ("minecraft:mushroom_fields", 14),
-        ("minecraft:beach", 16),
-        ("minecraft:jungle", 19),
-        ("minecraft:jungle_hills", 22),
-        ("minecraft:deep_ocean", 24),
-        ("minecraft:savanna", 35),
-        ("minecraft:badlands", 37),
-        ("minecraft:mesa", 37),
-    ];
-    SEED.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    SEED_BIOME_IDS.iter().map(|(k, v)| (k.to_string(), *v)).collect()
 }
 
 /// The result of mapping one Java block palette entry.
@@ -160,8 +167,8 @@ impl RegistryRules {
             report.record(
                 LossKind::UnmappedId,
                 format!("block {}", java.name),
-                "Java block properties dropped: no Java→Bedrock state rule yet \
-                 (registry-gen pending client.jar)",
+                "palette-entry properties dropped: no semantic cross-edition state \
+                 rule yet (registry-gen pending client.jar)",
             );
         }
         MappedBlock {
@@ -192,6 +199,44 @@ impl RegistryRules {
                 0
             }
         }
+    }
+
+    /// The Bedrock-id → Java-name inverse of [`Self::biome_ids`], derived
+    /// on the fly so the two directions can never drift (see
+    /// [`SEED_BIOME_IDS`]): iterating the name-sorted map, the
+    /// alphabetically-first name per id wins (`snowy_plains` over
+    /// `snowy_tundra`, `badlands` over `mesa`).
+    pub fn biome_names(&self) -> BTreeMap<i32, String> {
+        let mut out = BTreeMap::new();
+        for (name, id) in &self.biome_ids {
+            out.entry(*id).or_insert_with(|| name.clone());
+        }
+        out
+    }
+
+    /// Map a Bedrock numeric biome id → Java biome name for the reverse
+    /// direction. Unknown ids fall back to ocean with one loss row per
+    /// distinct id per chunk (deduped by the caller's `reported` set,
+    /// keyed by the id).
+    pub fn map_biome_to_java(
+        &self,
+        names: &BTreeMap<i32, String>,
+        bedrock_id: i32,
+        reported: &mut BTreeSet<i32>,
+        report: &mut ConversionReport,
+    ) -> String {
+        if let Some(name) = names.get(&bedrock_id) {
+            return name.clone();
+        }
+        if reported.insert(bedrock_id) {
+            report.record(
+                LossKind::UnmappedId,
+                format!("biome id {bedrock_id}"),
+                "no Bedrock→Java biome name; fell back to minecraft:ocean — extend \
+                 biome_ids in the rule table",
+            );
+        }
+        "minecraft:ocean".to_string()
     }
 }
 
@@ -228,7 +273,7 @@ mod tests {
 
     #[test]
     fn stateful_block_drops_properties_with_one_loss_per_name() {
-        let mut rules = RegistryRules::default();
+        let rules = RegistryRules::default();
         let mut report = ConversionReport::new();
         let mut seen = BTreeSet::new();
         let stairs = block("minecraft:oak_stairs", &[("facing", "east"), ("half", "bottom")]);
@@ -264,6 +309,35 @@ mod tests {
         assert_eq!(rules.map_biome("minecraft:plains", &mut seen, &mut report), 1);
         assert_eq!(rules.map_biome("minecraft:nowhere", &mut seen, &mut report), 0);
         assert_eq!(rules.map_biome("minecraft:nowhere", &mut seen, &mut report), 0);
+        assert_eq!(report.count_with_kind(LossKind::UnmappedId), 1, "deduped per chunk");
+    }
+
+    #[test]
+    fn inverse_biome_table_is_derived_from_the_seed() {
+        let rules = RegistryRules::default();
+        let names = rules.biome_names();
+        // Forward/inverse agree for unambiguous ids.
+        assert_eq!(names.get(&1).map(String::as_str), Some("minecraft:plains"));
+        assert_eq!(names.get(&0).map(String::as_str), Some("minecraft:ocean"));
+        // Aliased ids keep the alphabetically-first name per id (documented
+        // deterministic tie-break): snowy_plains beats snowy_tundra,
+        // badlands beats mesa.
+        assert_eq!(names.get(&12).map(String::as_str), Some("minecraft:snowy_plains"));
+        assert_eq!(names.get(&37).map(String::as_str), Some("minecraft:badlands"));
+        // Both alias directions still map forward.
+        assert_eq!(rules.map_biome("minecraft:snowy_plains", &mut BTreeSet::new(), &mut ConversionReport::new()), 12);
+        assert_eq!(rules.map_biome("minecraft:mesa", &mut BTreeSet::new(), &mut ConversionReport::new()), 37);
+    }
+
+    #[test]
+    fn reverse_biome_unknown_id_falls_back_to_ocean_with_loss() {
+        let rules = RegistryRules::default();
+        let names = rules.biome_names();
+        let mut report = ConversionReport::new();
+        let mut seen = BTreeSet::new();
+        assert_eq!(rules.map_biome_to_java(&names, 1, &mut seen, &mut report), "minecraft:plains");
+        assert_eq!(rules.map_biome_to_java(&names, 999, &mut seen, &mut report), "minecraft:ocean");
+        assert_eq!(rules.map_biome_to_java(&names, 999, &mut seen, &mut report), "minecraft:ocean");
         assert_eq!(report.count_with_kind(LossKind::UnmappedId), 1, "deduped per chunk");
     }
 
