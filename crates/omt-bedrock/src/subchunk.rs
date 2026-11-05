@@ -93,7 +93,8 @@ pub use omt_world::BedrockBiomeSlot as SubchunkBiomes;
 /// Decoded `0x2B` record: 512-byte heightmap + per-subchunk biome storages.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Data3d {
-    /// 256 heights (u16 LE), column order x*16 + z.
+    /// 256 heights (u16 LE), column order `z*16 + x` (z-major, x fastest —
+    /// probe-verified, see PLAN.md "Verified 1.26.52 format facts").
     pub heightmap: Vec<u16>,
     /// One entry per subchunk slot, bottom to top; length is however many
     /// slots the world wrote (16 in the fixtures).
@@ -255,7 +256,7 @@ impl Subchunk {
     pub fn block_index(&self, x: usize, y: usize, z: usize) -> Option<u16> {
         let storage = self.storages.first()?;
         let raw = match (&storage.indices, storage.palette.len()) {
-            (_, n) if n == 1 => 0,
+            (_, 1) => 0,
             (Some(idx), _) => *idx.get(block_index_xzy(x, y, z))?,
             (None, _) => 0,
         };

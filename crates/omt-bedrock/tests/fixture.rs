@@ -3,7 +3,6 @@
 //! otherwise so CI without fixtures stays green.
 
 use omt_bedrock::{BedrockWorld, keys};
-use omt_world::WorldStore;
 
 fn fixture() -> Option<std::path::PathBuf> {
     std::env::var_os("OMT_BEDROCK_FIXTURE").map(std::path::PathBuf::from)
