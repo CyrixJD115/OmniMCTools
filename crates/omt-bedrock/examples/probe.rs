@@ -4,6 +4,9 @@ use bedrock_leveldb::{Db, OpenOptions};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+/// key shape -> (count, sample (key, value) pairs)
+type ShapeSamples = BTreeMap<String, (usize, Vec<(Vec<u8>, Vec<u8>)>)>;
+
 fn main() {
     let world = PathBuf::from(std::env::args().nth(1).expect("usage: probe <world-dir>"));
     let db = Db::open(world.join("db"), OpenOptions { read_only: true, ..Default::default() })
@@ -12,7 +15,7 @@ fn main() {
 
     // Shape = key length + tag hypothesis. For 10-byte keys show both
     // candidate positions (key[8] if y-last, key[9] if y-first).
-    let mut shapes: BTreeMap<String, (usize, Vec<(Vec<u8>, Vec<u8>)>)> = BTreeMap::new();
+    let mut shapes: ShapeSamples = BTreeMap::new();
     let mut total = 0usize;
 
     for (k, v) in snapshot.iter() {

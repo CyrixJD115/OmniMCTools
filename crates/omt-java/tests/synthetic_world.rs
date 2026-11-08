@@ -35,7 +35,7 @@ fn chunk_nbt(x: i32, z: i32, y: i8, block: &str) -> Vec<u8> {
             ("Status".into(), Tag::String("minecraft:full".into())),
             ("InhabitedTime".into(), Tag::Long(1234)),
             ("sections".into(), Tag::List(vec![Tag::Compound(vec![
-                ("Y".into(), Tag::Byte(y as i8)),
+                ("Y".into(), Tag::Byte(y)),
                 ("block_states".into(), Tag::Compound(vec![
                     ("palette".into(), Tag::List(vec![
                         Tag::Compound(vec![("Name".into(), Tag::String(block.into()))]),

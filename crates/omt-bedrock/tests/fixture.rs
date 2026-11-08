@@ -86,7 +86,7 @@ fn digp_and_actors_decode_as_nbt() {
         for &(x, z) in &w.list_chunks(dim).expect("list") {
             if let Some(digp) = w.raw_get(&keys::digp_key(x, z, dim)).expect("get") {
                 assert_eq!(digp.len() % 8, 0, "digp ({x},{z}) dim {dim} not a list of 8-byte ids");
-                for id in digp.chunks_exact(8) {
+                for id in digp.as_chunks::<8>().0 {
                     let mut key = b"actorprefix".to_vec();
                     key.extend_from_slice(id);
                     if let Some(raw) = w.raw_get(&key).expect("get") {

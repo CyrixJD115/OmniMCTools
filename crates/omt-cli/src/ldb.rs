@@ -44,10 +44,10 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             let filter: Option<Vec<u8>> = prefix.as_deref().and_then(parse_prefix);
             let mut n = 0usize;
             for (k, v) in world.iter_raw()? {
-                if let Some(f) = &filter {
-                    if !k.starts_with(f) {
-                        continue;
-                    }
+                if let Some(f) = &filter
+                    && !k.starts_with(f)
+                {
+                    continue;
                 }
                 n += 1;
                 let desc = describe(&k);
@@ -122,7 +122,7 @@ fn hex(k: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())
@@ -132,7 +132,7 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 fn parse_prefix(s: &str) -> Option<Vec<u8>> {
-    if s.chars().all(|c| c.is_ascii_hexdigit()) && s.len() % 2 == 0 {
+    if s.chars().all(|c| c.is_ascii_hexdigit()) && s.len().is_multiple_of(2) {
         hex_decode(s)
     } else {
         Some(s.as_bytes().to_vec())

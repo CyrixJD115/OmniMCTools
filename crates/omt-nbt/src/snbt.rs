@@ -82,7 +82,7 @@ fn render(tag: &Tag, out: &mut String, indent: Option<usize>, depth: usize) {
 fn render_array(
     out: &mut String,
     kind: &str,
-    items: impl Iterator<Item = String> + ExactSizeIterator,
+    items: impl ExactSizeIterator<Item = String>,
     len: usize,
     indent: Option<usize>,
     depth: usize,
@@ -112,18 +112,20 @@ fn render_seq<'a>(
 ) {
     out.push('[');
     for (i, item) in items.enumerate() {
-        if let Some(w) = indent {
-            if i > 0 {
-                push_indent(out, w, depth + 1);
-            }
+        if let Some(w) = indent
+            && i > 0
+        {
+            push_indent(out, w, depth + 1);
         }
         f(item, out, child_indent(indent, item), depth + 1);
         if i + 1 < len {
             out.push_str(if indent.is_some() { ",\n" } else { ", " });
         }
     }
-    if indent.is_some() && len > 0 {
-        push_indent(out, indent.unwrap(), depth);
+    if len > 0
+        && let Some(w) = indent
+    {
+        push_indent(out, w, depth);
     }
     out.push(']');
 }
@@ -344,20 +346,20 @@ impl<'a> Parser<'a> {
         self.expect(b'[')?;
         self.skip_ws();
         // Typed array prefix: [B; …] [I; …] [L; …] (also tolerate lowercase).
-        if let Some(b) = self.peek() {
-            if matches!(b, b'B' | b'I' | b'L' | b'b' | b'i' | b'l') {
-                let save = self.pos;
-                let kind = b.to_ascii_uppercase();
+        if let Some(b) = self.peek()
+            && matches!(b, b'B' | b'I' | b'L' | b'b' | b'i' | b'l')
+        {
+            let save = self.pos;
+            let kind = b.to_ascii_uppercase();
+            self.pos += 1;
+            self.skip_ws();
+            if self.peek() == Some(b';') {
                 self.pos += 1;
                 self.skip_ws();
-                if self.peek() == Some(b';') {
-                    self.pos += 1;
-                    self.skip_ws();
-                    return self.typed_array(kind);
-                }
-                // Not an array marker — rewind (it was a bareword element).
-                self.pos = save;
+                return self.typed_array(kind);
             }
+            // Not an array marker — rewind (it was a bareword element).
+            self.pos = save;
         }
         let mut items = Vec::new();
         loop {

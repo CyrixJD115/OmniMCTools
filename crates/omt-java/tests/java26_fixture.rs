@@ -64,10 +64,8 @@ fn java26_fixture_roundtrip() {
         .iter()
         .map(|&(x, z)| (x, z, world.read_chunk(0, x, z).unwrap().expect("chunk present")))
         .find(|(_, _, c)| c.status.as_deref() == Some("minecraft:full"))
-        .map(|(x, z, c)| (x, z, c))
+        .map(|(_, _, c)| c)
         .expect("fixture contains full chunks");
-    let (x, z) = (chunk.0, chunk.1);
-    let chunk = chunk.2;
     assert_eq!(chunk.data_version, 5023);
     assert!(chunk.biomes_3d, "sections carry 3D biomes");
     assert!(!chunk.slices.is_empty());

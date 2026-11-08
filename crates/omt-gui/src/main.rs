@@ -70,11 +70,11 @@ impl OmniMCTools {
                     if !path.is_dir() {
                         continue;
                     }
-                    if let Ok(detected) = omt_world::detect(&path) {
-                        if let Ok(summary) = WorldSummary::from_detected(&detected) {
-                            self.worlds.push(summary);
-                            found += 1;
-                        }
+                    if let Ok(detected) = omt_world::detect(&path)
+                        && let Ok(summary) = WorldSummary::from_detected(&detected)
+                    {
+                        self.worlds.push(summary);
+                        found += 1;
                     }
                 }
                 self.status = format!("{found} world(s) in {}", dir.display());

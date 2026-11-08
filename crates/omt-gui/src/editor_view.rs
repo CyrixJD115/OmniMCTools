@@ -105,7 +105,7 @@ fn row_line(r: &crate::editor::Row, tab_index: usize) -> Element<'_, Message> {
     let (name, action) = if r.is_container {
         (
             format!("{marker} {indent}{} ({})", r.label, r.child_count),
-            if r.expanded { EditorMsg::ToggleExpand(r.path.to_string()) } else { EditorMsg::ToggleExpand(r.path.to_string()) },
+            EditorMsg::ToggleExpand(r.path.to_string()),
         )
     } else {
         (format!(" {marker} {indent}{}", r.label), EditorMsg::Select(r.path.to_string()))

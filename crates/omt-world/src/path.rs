@@ -111,6 +111,16 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+impl VPath {
+    /// The LevelDB record tag byte when this is a `:CHUNK` path with a tag.
+    pub fn tag_of_chunk(&self) -> Option<u8> {
+        match self {
+            Self::DbChunk { tag, .. } => *tag,
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,15 +143,5 @@ mod tests {
 
         let p: VPath = "/region/r.0.0.mca".parse().unwrap();
         assert_eq!(p, VPath::File("region/r.0.0.mca".into()));
-    }
-}
-
-impl VPath {
-    /// The LevelDB record tag byte when this is a `:CHUNK` path with a tag.
-    pub fn tag_of_chunk(&self) -> Option<u8> {
-        match self {
-            Self::DbChunk { tag, .. } => *tag,
-            _ => None,
-        }
     }
 }

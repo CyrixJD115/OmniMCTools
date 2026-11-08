@@ -73,10 +73,10 @@ fn main() {
                 if let Some(entries) = &st.raw_entries {
                     for e in entries {
                         palette_entries_checked += 1;
-                        if let omt_nbt::Tag::Compound(fields) = e {
-                            if let Some(omt_nbt::Tag::Int(v)) = fields.iter().find(|(k, _)| k == "version").map(|(_, t)| t) {
-                                *version_seen.entry(v.to_string()).or_default() += 1;
-                            }
+                        if let omt_nbt::Tag::Compound(fields) = e
+                            && let Some(omt_nbt::Tag::Int(v)) = fields.iter().find(|(k, _)| k == "version").map(|(_, t)| t)
+                        {
+                            *version_seen.entry(v.to_string()).or_default() += 1;
                         }
                     }
                 }

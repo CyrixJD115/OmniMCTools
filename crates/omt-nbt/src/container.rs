@@ -62,13 +62,13 @@ impl Container {
             Self::Raw => data.to_vec(),
             Self::Gzip => {
                 let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-                e.write_all(data).ok().expect("Vec writer cannot fail");
-                e.finish().ok().expect("Vec writer cannot fail")
+                e.write_all(data).expect("Vec writer cannot fail");
+                e.finish().expect("Vec writer cannot fail")
             }
             Self::Zlib => {
                 let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-                e.write_all(data).ok().expect("Vec writer cannot fail");
-                e.finish().ok().expect("Vec writer cannot fail")
+                e.write_all(data).expect("Vec writer cannot fail");
+                e.finish().expect("Vec writer cannot fail")
             }
         }
     }

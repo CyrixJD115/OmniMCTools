@@ -258,10 +258,10 @@ impl EditOp {
         value: Tag,
     ) -> Result<Self, EditError> {
         let p = parent.resolve(root).ok_or(EditError::BadParent(parent.clone()))?;
-        if let Tag::Compound(entries) = p {
-            if entries.iter().any(|(k, _)| k == key) {
-                return Err(EditError::DuplicateKey { parent: parent.clone(), key: key.to_string() });
-            }
+        if let Tag::Compound(entries) = p
+            && entries.iter().any(|(k, _)| k == key)
+        {
+            return Err(EditError::DuplicateKey { parent: parent.clone(), key: key.to_string() });
         }
         Ok(Self::Insert { parent: parent.clone(), key: key.to_string(), index: None, value })
     }
@@ -274,12 +274,11 @@ impl EditOp {
         value: Tag,
     ) -> Result<Self, EditError> {
         let p = parent.resolve(root).ok_or(EditError::BadParent(parent.clone()))?;
-        if let Tag::List(items) = p {
-            if let Some(i) = index {
-                if i > items.len() {
-                    return Err(EditError::IndexOutOfRange { parent: parent.clone(), index: i });
-                }
-            }
+        if let Tag::List(items) = p
+            && let Some(i) = index
+            && i > items.len()
+        {
+            return Err(EditError::IndexOutOfRange { parent: parent.clone(), index: i });
         }
         Ok(Self::Insert { parent: parent.clone(), key: String::new(), index, value })
     }
@@ -330,10 +329,10 @@ impl EditOp {
                 }
             }
             Tag::List(items) => {
-                if let Some(i) = to_index {
-                    if i > items.len() {
-                        return Err(EditError::IndexOutOfRange { parent: to_parent.clone(), index: i });
-                    }
+                if let Some(i) = to_index
+                    && i > items.len()
+                {
+                    return Err(EditError::IndexOutOfRange { parent: to_parent.clone(), index: i });
                 }
             }
             _ => return Err(EditError::BadParent(to_parent.clone())),
@@ -592,15 +591,15 @@ impl UndoStack {
     /// same path (classic "typing = one undo step" behavior).
     pub fn push_set_coalescing(&mut self, path: &TagPath, new: Tag, root: &mut Tag) -> Result<(), EditError> {
         let same_target = self.last_coalesce.as_deref() == Some(&path.to_string());
-        if same_target {
-            if let Some(EditOp::SetValue { new: last_new, .. }) = self.applied.last_mut() {
-                let slot = path
-                    .resolve_mut(root)
-                    .ok_or(EditError::NoSuchPath(path.clone()))?;
-                *slot = new.clone();
-                *last_new = new;
-                return Ok(());
-            }
+        if same_target
+            && let Some(EditOp::SetValue { new: last_new, .. }) = self.applied.last_mut()
+        {
+            let slot = path
+                .resolve_mut(root)
+                .ok_or(EditError::NoSuchPath(path.clone()))?;
+            *slot = new.clone();
+            *last_new = new;
+            return Ok(());
         }
         let op = EditOp::prepare_set(root, path, new)?;
         self.push(op, root)?;

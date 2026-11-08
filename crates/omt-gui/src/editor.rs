@@ -203,12 +203,12 @@ impl EditorTab {
                 }
             }
             EditorMsg::CopySelected => {
-                if let Some(path) = &self.selected {
-                    if let Some(tag) = path.resolve(self.doc.root()) {
-                        let snbt_text = snbt::to_snbt(tag);
-                        self.status = format!("copied {} chars of SNBT", snbt_text.len());
-                        return vec![iced::clipboard::write(snbt_text)];
-                    }
+                if let Some(path) = &self.selected
+                    && let Some(tag) = path.resolve(self.doc.root())
+                {
+                    let snbt_text = snbt::to_snbt(tag);
+                    self.status = format!("copied {} chars of SNBT", snbt_text.len());
+                    return vec![iced::clipboard::write(snbt_text)];
                 }
                 self.status = "nothing selected to copy".into();
             }
@@ -223,20 +223,20 @@ impl EditorTab {
     }
 
     fn sync_inputs_to_selection(&mut self) {
-        if let Some(path) = self.selected.clone() {
-            if let Some(tag) = path.resolve(self.doc.root()) {
-                match tag {
-                    Tag::Compound(_) | Tag::List(_) => {
-                        self.value_input.clear();
-                        self.name_input = match path.last() {
-                            Some(omt_nbt::PathSeg::Key(k)) => k.clone(),
-                            Some(omt_nbt::PathSeg::Index(i)) => format!("[{i}]"),
-                            None => String::new(),
-                        };
-                    }
-                    scalar => {
-                        self.value_input = snbt::to_snbt(scalar);
-                    }
+        if let Some(path) = self.selected.clone()
+            && let Some(tag) = path.resolve(self.doc.root())
+        {
+            match tag {
+                Tag::Compound(_) | Tag::List(_) => {
+                    self.value_input.clear();
+                    self.name_input = match path.last() {
+                        Some(omt_nbt::PathSeg::Key(k)) => k.clone(),
+                        Some(omt_nbt::PathSeg::Index(i)) => format!("[{i}]"),
+                        None => String::new(),
+                    };
+                }
+                scalar => {
+                    self.value_input = snbt::to_snbt(scalar);
                 }
             }
         }
@@ -520,20 +520,19 @@ impl EditorTab {
         let mut truncated = false;
         let selected_str = self.selected.as_ref().map(|p| p.to_string());
 
-        fn build(
-            tag: &Tag,
-            path: &mut TagPath,
-            label: String,
-            depth: usize,
-            expanded: &HashSet<String>,
-            changes: &HashMap<String, ChangeKind>,
-            current_hit: &Option<String>,
-            selected_str: &Option<String>,
-            rows: &mut Vec<Row>,
-            truncated: &mut bool,
-        ) {
-            if rows.len() >= MAX_ROWS {
-                *truncated = true;
+        /// Shared state threaded through the recursive row builder.
+        struct Ctx<'a> {
+            expanded: &'a HashSet<String>,
+            changes: &'a HashMap<String, ChangeKind>,
+            current_hit: &'a Option<String>,
+            selected_str: &'a Option<String>,
+            rows: &'a mut Vec<Row>,
+            truncated: &'a mut bool,
+        }
+
+        fn build(tag: &Tag, path: &mut TagPath, label: String, depth: usize, ctx: &mut Ctx<'_>) {
+            if ctx.rows.len() >= MAX_ROWS {
+                *ctx.truncated = true;
                 return;
             }
             let path_str = path.to_string();
@@ -543,7 +542,7 @@ impl EditorTab {
                 _ => (false, 0),
             };
             let value_snbt = if is_container { None } else { Some(snbt::to_snbt(tag)) };
-            rows.push(Row {
+            ctx.rows.push(Row {
                 path: path.clone(),
                 depth,
                 label,
@@ -551,26 +550,26 @@ impl EditorTab {
                 value_snbt,
                 is_container,
                 child_count,
-                expanded: is_container && expanded.contains(&path_str),
-                changed: changes.get(&path_str).copied(),
-                search_hit: current_hit.as_deref() == Some(path_str.as_str()),
-                selected: selected_str.as_deref() == Some(path_str.as_str()),
+                expanded: is_container && ctx.expanded.contains(&path_str),
+                changed: ctx.changes.get(&path_str).copied(),
+                search_hit: ctx.current_hit.as_deref() == Some(path_str.as_str()),
+                selected: ctx.selected_str.as_deref() == Some(path_str.as_str()),
             });
-            if !is_container || !expanded.contains(&path_str) {
+            if !is_container || !ctx.expanded.contains(&path_str) {
                 return;
             }
             match tag {
                 Tag::Compound(entries) => {
                     for (k, v) in entries {
                         path.push_key_mut(k.clone());
-                        build(v, path, k.clone(), depth + 1, expanded, changes, current_hit, selected_str, rows, truncated);
+                        build(v, path, k.clone(), depth + 1, ctx);
                         path.pop();
                     }
                 }
                 Tag::List(items) => {
                     for (i, v) in items.iter().enumerate() {
                         path.push_index_mut(i);
-                        build(v, path, format!("[{i}]"), depth + 1, expanded, changes, current_hit, selected_str, rows, truncated);
+                        build(v, path, format!("[{i}]"), depth + 1, ctx);
                         path.pop();
                     }
                 }
@@ -579,18 +578,15 @@ impl EditorTab {
         }
 
         let mut path = TagPath::root();
-        build(
-            self.doc.root(),
-            &mut path,
-            "(root)".into(),
-            0,
-            &self.expanded,
-            &changes,
-            &current_hit,
-            &selected_str,
-            &mut rows,
-            &mut truncated,
-        );
+        let mut ctx = Ctx {
+            expanded: &self.expanded,
+            changes: &changes,
+            current_hit: &current_hit,
+            selected_str: &selected_str,
+            rows: &mut rows,
+            truncated: &mut truncated,
+        };
+        build(self.doc.root(), &mut path, "(root)".into(), 0, &mut ctx);
         self.rows = rows;
         self.truncated = truncated;
     }
