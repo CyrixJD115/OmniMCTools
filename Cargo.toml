@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["crates/*", "tools/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -28,6 +28,7 @@ iced = "0.14"
 bedrock-leveldb = "0.3"
 crc32fast = "1"
 rfd = "0.17"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
