@@ -53,6 +53,12 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 }))?);
             } else {
                 println!("{} chunks in dimension {}", chunks.len(), args.dim);
+                if chunks.is_empty() && world.dimension_dir(args.dim).is_none_or(|d| !d.is_dir()) {
+                    eprintln!(
+                        "note: dimension {} has no region files in this world (unexplored?)",
+                        omt_world::Dimension::from_id(args.dim).map(|d| d.name()).unwrap_or("unknown")
+                    );
+                }
                 for &(x, z) in &chunks {
                     println!("{x} {z}");
                 }

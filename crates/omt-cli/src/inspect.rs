@@ -57,10 +57,19 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             print_common(
                 data.get("GameType").and_then(|t| t.as_i64()).map(|v| v as i32),
                 data.get("Time").and_then(|t| t.as_i64()),
-                None,
+                omt_world::java_spawn_xz(data),
             );
-            if root.join("region").is_dir() {
-                println!("region/          : present");
+            let layout = omt_java::store::JavaLayout::detect(root);
+            let regions = omt_java::JavaWorld::open(root).ok().and_then(|w| w.dimension_dir(0));
+            match regions {
+                Some(dir) if dir.is_dir() => {
+                    let rel = dir.strip_prefix(root).unwrap_or(&dir).display();
+                    println!("regions          : {rel} ({})", match layout {
+                        omt_java::store::JavaLayout::Namespaced => "26.3+ namespaced",
+                        omt_java::store::JavaLayout::Classic => "classic",
+                    });
+                }
+                _ => println!("regions          : none (unexplored?)"),
             }
         }
         omt_world::Detected::Archive(p) => {
