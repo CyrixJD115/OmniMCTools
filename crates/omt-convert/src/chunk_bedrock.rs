@@ -347,7 +347,7 @@ mod tests {
         };
         set(1, 2, 3, 1); // stone
         set(4, 5, 6, 2); // stairs (properties dropped)
-        let nbt = Nbt {
+        Nbt {
             name: String::new(),
             tag: Tag::Compound(vec![
                 ("DataVersion".into(), Tag::Int(3953)),
@@ -382,8 +382,7 @@ mod tests {
                     ])]),
                 ),
             ]),
-        };
-        nbt
+        }
     }
 
     #[test]
@@ -455,8 +454,8 @@ mod tests {
             palette: vec!["minecraft:plains".into(), "minecraft:desert".into()],
             cells: {
                 let mut c = vec![0u16; 64];
-                for i in 16..64 {
-                    c[i] = 1;
+                for slot in c.iter_mut().skip(16) {
+                    *slot = 1;
                 }
                 c
             },
