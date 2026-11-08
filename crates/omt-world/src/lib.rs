@@ -9,7 +9,7 @@ pub mod packing;
 pub mod path;
 pub mod store;
 
-pub use detect::{detect, Detected, WorldSummary, WorldSource};
+pub use detect::{detect, java_spawn_xz, Detected, WorldSummary, WorldSource};
 pub use packing::{
     pack_java_biome_cells, pack_java_heightmap, pack_java_indices, pack_java_packed,
     permute_xzy_to_yzx, permute_yzx_to_xzy, unpack_java_biome_cells, unpack_java_heightmap,

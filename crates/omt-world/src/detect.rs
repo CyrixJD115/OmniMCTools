@@ -157,19 +157,9 @@ impl WorldSummary {
                     java_data_version: dv,
                     bedrock_storage_version: None,
                     bedrock_last_opened: None,
-                    gamemode: level_dat
-                        .tag
-                        .get("GameType")
-                        .and_then(|t| t.as_i64())
-                        .map(|v| v as i32),
-                    time_played_seconds: level_dat.tag.get("Time").and_then(|t| t.as_i64()),
-                    spawn: match (
-                        level_dat.tag.get("SpawnX").and_then(|t| t.as_i64()),
-                        level_dat.tag.get("SpawnZ").and_then(|t| t.as_i64()),
-                    ) {
-                        (Some(x), Some(z)) => Some((x as i32, z as i32)),
-                        _ => None,
-                    },
+                    gamemode: data.get("GameType").and_then(|t| t.as_i64()).map(|v| v as i32),
+                    time_played_seconds: data.get("Time").and_then(|t| t.as_i64()),
+                    spawn: java_spawn_xz(data),
                     icon: None,
                     below_floor,
                 })
@@ -205,5 +195,23 @@ fn read_levelname_txt(root: &Path) -> Option<String> {
         None
     } else {
         Some(t.to_string())
+    }
+}
+
+/// Java spawn position across level.dat eras. 26.3 (DataVersion 5023) nests a
+/// compound `spawn{pos:[I;x,y,z], pitch, yaw, dimension}`; older worlds carry
+/// flat `Data.SpawnX`/`Data.SpawnZ` ints. Returns the (x, z) columns either
+/// way. Verified against the 26.3 fixture (PLAN §0, 2026-11-08).
+pub fn java_spawn_xz(data: &omt_nbt::Tag) -> Option<(i32, i32)> {
+    if let Some(omt_nbt::Tag::IntArray(pos)) = data.get("spawn").and_then(|s| s.get("pos"))
+        && pos.len() >= 3 {
+            return Some((pos[0], pos[2]));
+        }
+    match (
+        data.get("SpawnX").and_then(|t| t.as_i64()),
+        data.get("SpawnZ").and_then(|t| t.as_i64()),
+    ) {
+        (Some(x), Some(z)) => Some((x as i32, z as i32)),
+        _ => None,
     }
 }
