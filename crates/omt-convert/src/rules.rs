@@ -4,27 +4,40 @@
 //! data-driven** (`database.ndb` + `_tagModifiers` rule column; no id
 //! literals in the binary — findings, "Task A" conclusion). OMT mirrors the
 //! *architecture*, not the data: a versioned RON table the converter
-//! consults, designed for the M3 `tools/registry-gen` generator to fill.
+//! consults, filled by the `tools/registry-gen` generator (2026-11-08).
 //!
-//! What exists today (honest scope):
-//! - `block_rules`: empty by default. Unmapped Java blocks pass through by
-//!   name; any Java properties are **dropped with a loss row** because the
-//!   Java-state → Bedrock-state semantic table is exactly what
-//!   `registry-gen` will produce once a `client.jar` is pinned. No guessed
-//!   mappings.
-//! - `biome_ids`: the classic stable Bedrock 3D-biome id table (stable
-//!   since 1.16 when per-block biomes shipped). Unmapped biome names fall
-//!   back to ocean (0) with a loss row.
+//! Contents:
+//! - [`RegistryRules::state_rules`] — the semantic Java-state → Bedrock
+//!   block+state table, keyed `name[k=v,…]` with properties sorted and
+//!   values in the exact SNBT canonical form `omt-bedrock` decodes palette
+//!   NBT into (ints bare, bytes `b`-suffixed, strings raw). Generated from
+//!   the pinned client.jar blockstates + Chunker registry data + the
+//!   hand-authored `hand-maps.ron` semantics; see the table header.
+//! - [`RegistryRules::block_rules`] — static renames (Java-only names
+//!   with a stateless Bedrock twin); blocks absent here **and** in
+//!   `state_rules` keep the honest loss-ledger passthrough.
+//! - [`RegistryRules::biome_ids`] — the full Bedrock 3D-biome id table;
+//!   unknown names fall back to ocean (0) with a loss row.
+//! - [`RegistryRules::enchant_ids`] — Java enchantment id → Bedrock
+//!   numeric id; unmapped enchantments (e.g. `sweeping_edge`) drop with a
+//!   loss row, never guessed.
 //! - `block_palette_version`: probe-derived from the 1.26.52 fixtures —
 //!   every palette entry in 6228 checked entries carries `18168865`
-//!   (packed major.minor.patch.rev = 1.21.60.33; see
-//!   `omt-bedrock/examples/heightprobe.rs`).
+//!   (packed 1.21.60.33; see `omt-bedrock/examples/heightprobe.rs`).
+//!
+//! The generated table is committed at `data/registry.ron` and embedded
+//! with `include_str!` (versioned RON chosen over a generated `.rs`
+//! constant: data stays human-reviewable and diffable, mirroring the
+//! `omt-versions/registry.ron` precedent). A user-supplied `--rules` RON
+//! can override the embedded default; malformed tables are hard errors.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use omt_world::BlockState;
 
+use crate::items::EnchantIdMap;
 use crate::loss::{ConversionReport, LossKind};
 
 /// Block palette entry version written into converted subchunks.
@@ -32,8 +45,8 @@ pub const DEFAULT_BLOCK_PALETTE_VERSION: i32 = 18168865;
 
 /// One Java block → Bedrock mapping. `states` values are SNBT strings so
 /// Bedrock's typed states (ints, bytes) survive the RON round-trip; they
-/// are parsed to NBT at serialization time.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+/// are parsed to typed NBT at serialization time.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct BlockRule {
     /// Bedrock block name (namespaced). Same name ⇒ state-only mapping.
     pub name: String,
@@ -42,31 +55,38 @@ pub struct BlockRule {
     pub states: BTreeMap<String, String>,
 }
 
-/// The conversion rule table (loaded from RON or seeded).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+/// The conversion rule table (embedded default, or loaded from RON).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct RegistryRules {
     /// Schema version, bumped when the shape changes.
-    #[serde(default = "default_version")]
+    #[serde(default)]
     pub version: u32,
-    /// Java block id (`minecraft:oak_stairs`, no property suffix) → rule.
+    /// Java block id (`minecraft:bricks`, no property suffix) → rule.
+    /// Static renames only — stateful mapping lives in [`state_rules`].
     #[serde(default)]
     pub block_rules: BTreeMap<String, BlockRule>,
+    /// `java name[k=v,…]` → Bedrock name + states. Keys are sorted,
+    /// canonical SNBT strings (see module docs).
+    #[serde(default)]
+    pub state_rules: BTreeMap<String, BlockRule>,
     /// Java biome id (`minecraft:plains`) → Bedrock numeric biome id.
     #[serde(default)]
     pub biome_ids: BTreeMap<String, i32>,
+    /// Java enchantment id (`minecraft:sharpness`) → Bedrock numeric id.
+    #[serde(default)]
+    pub enchant_ids: BTreeMap<String, i16>,
     /// `version` int written into generated Bedrock palette entries.
     #[serde(default = "default_palette_version")]
     pub block_palette_version: i32,
-}
-
-fn default_version() -> u32 {
-    1
 }
 
 fn default_palette_version() -> i32 {
     DEFAULT_BLOCK_PALETTE_VERSION
 }
 
+/// `Default` is the seed baseline (empty rules, seeded biomes) — the
+/// pre-registry behavior. Production conversion uses
+/// [`RegistryRules::embedded`].
 impl Default for RegistryRules {
     fn default() -> Self {
         Self::seed()
@@ -74,16 +94,47 @@ impl Default for RegistryRules {
 }
 
 impl RegistryRules {
-    /// The seeded rule table: stable biome ids, no block rules yet.
+    /// The empty baseline: no block/state/enchant rules, seeded biomes
+    /// only. This is the pre-registry behavior (loss-ledger passthrough);
+    /// production conversion uses [`Self::embedded`].
     pub fn seed() -> Self {
+        Self { biome_ids: seed_biome_ids(), ..Self::empty() }
+    }
+
+    /// All-empty table (no biome seed either); the base for [`Self::seed`].
+    fn empty() -> Self {
         Self {
             version: 1,
             block_rules: BTreeMap::new(),
-            biome_ids: seed_biome_ids(),
+            state_rules: BTreeMap::new(),
+            biome_ids: BTreeMap::new(),
+            enchant_ids: BTreeMap::new(),
             block_palette_version: DEFAULT_BLOCK_PALETTE_VERSION,
         }
     }
+
+    /// The embedded generated table (`data/registry.ron`, committed with
+    /// the repo). Parsing it can only fail if the committed artifact were
+    /// corrupted in-tree; `tools/registry-gen` regenerates it and a unit
+    /// test parses it on every build, so the `expect` documents an
+    /// impossible-by-construction state rather than a runtime risk.
+    pub fn embedded() -> &'static Self {
+        static EMBEDDED: OnceLock<RegistryRules> = OnceLock::new();
+        EMBEDDED.get_or_init(|| {
+            ron::from_str(EMBEDDED_TABLE)
+                .expect("embedded data/registry.ron is generated and unit-tested")
+        })
+    }
+
+    /// The [`EnchantIdMap`] view of [`Self::enchant_ids`] for the item
+    /// converters.
+    pub fn enchant_id_map(&self) -> EnchantIdMap {
+        EnchantIdMap::from_pairs(self.enchant_ids.clone())
+    }
 }
+
+/// The embedded generated table (see `data/registry.ron`).
+const EMBEDDED_TABLE: &str = include_str!("../data/registry.ron");
 
 /// Load a rule table from RON. Malformed files are hard errors — a silently
 /// ignored rule table would convert wrong.
@@ -94,10 +145,22 @@ pub fn load_rules(path: &Path) -> Result<RegistryRules, crate::error::ConvertErr
         .map_err(|e| crate::error::ConvertError::Store(format!("parsing {}: {e}", path.display())))
 }
 
-/// The classic Bedrock 3D-biome id table (stable since per-block biomes
-/// shipped in 1.16). Seed scope only — `registry-gen` (client.jar) will
-/// emit the complete current table; unknown names are loss-recorded and
-/// fall back to ocean, never guessed.
+/// Canonical state key: `name[k=v,k=v]`, keys sorted, values exactly as
+/// the palette decode renders them. The single key form for both rule
+/// directions (Java keys from chunk palettes, Bedrock keys likewise).
+pub fn state_key(name: &str, properties: &[(String, String)]) -> String {
+    if properties.is_empty() {
+        return name.to_string();
+    }
+    let sorted: BTreeMap<&str, &str> =
+        properties.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let inner: Vec<String> = sorted.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    format!("{name}[{}]", inner.join(","))
+}
+
+/// The classic Bedrock 3D-biome id seed (stable since per-block biomes
+/// shipped in 1.16). The generated table carries the full current set;
+/// these aliases remain forward-mappable for older-world inputs.
 ///
 /// **The single source for both directions**: the Java→Bedrock map and the
 /// Bedrock→Java inverse are both derived from this one table, so they
@@ -131,20 +194,20 @@ fn seed_biome_ids() -> BTreeMap<String, i32> {
     SEED_BIOME_IDS.iter().map(|(k, v)| (k.to_string(), *v)).collect()
 }
 
-/// The result of mapping one Java block palette entry.
+/// The result of mapping one palette entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MappedBlock {
     pub state: BlockState,
-    /// True when Java properties existed and could not be carried over.
+    /// True when source properties existed and could not be carried over.
     pub states_dropped: bool,
 }
 
 impl RegistryRules {
-    /// Map one Java palette entry. Java properties are dropped (with one
-    /// loss row per distinct block id per chunk, deduped by the caller's
-    /// `reported` set) unless an explicit rule maps them — the semantic
-    /// Java-state → Bedrock-state table is registry-gen's job, and guessing
-    /// state names would corrupt worlds rather than lose data.
+    /// Map one Java palette entry (Java → Bedrock). Exact state rule
+    /// first, then the static rename rule, then the name-only passthrough
+    /// with a loss row (per distinct block id per chunk, deduped by the
+    /// caller's `reported` set) — guessing state names would corrupt
+    /// worlds rather than lose data.
     pub fn map_block(
         &self,
         java: &BlockState,
@@ -152,29 +215,47 @@ impl RegistryRules {
         report: &mut ConversionReport,
     ) -> MappedBlock {
         let had_properties = !java.properties.is_empty();
+        if had_properties {
+            let key = state_key(&java.name, &java.properties);
+            if let Some(rule) = self.state_rules.get(&key) {
+                return rule_output(rule, false);
+            }
+        }
         if let Some(rule) = self.block_rules.get(&java.name) {
-            let properties: Vec<(String, String)> = rule
-                .states
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            return MappedBlock {
-                state: BlockState { name: rule.name.clone(), properties },
-                states_dropped: had_properties && rule.states.is_empty(),
-            };
+            // Static rename: any properties are uncovered (documented
+            // above — renames are stateless by construction).
+            return rule_output(rule, had_properties);
         }
         if had_properties && reported.insert(java.name.clone()) {
             report.record(
                 LossKind::UnmappedId,
                 format!("block {}", java.name),
                 "palette-entry properties dropped: no semantic cross-edition state \
-                 rule yet (registry-gen pending client.jar)",
+                 rule (extend tools/registry-gen hand-maps and regenerate)",
             );
         }
         MappedBlock {
             state: BlockState { name: java.name.clone(), properties: Vec::new() },
             states_dropped: had_properties,
         }
+    }
+
+    /// Map one Bedrock palette entry (Bedrock → Java) through the inverse
+    /// derived from this table. See [`ReverseBlockRules::map_block`].
+    pub fn map_block_to_java(
+        &self,
+        bedrock: &BlockState,
+        reported: &mut BTreeSet<String>,
+        report: &mut ConversionReport,
+    ) -> MappedBlock {
+        self.reverse().map_block(bedrock, reported, report)
+    }
+
+    /// The derived inverse rules (Bedrock → Java). Cached per table
+    /// instance by the caller for batch conversions — see
+    /// [`ReverseBlockRules`].
+    pub fn reverse(&self) -> ReverseBlockRules {
+        ReverseBlockRules::build(self)
     }
 
     /// Map a Java biome id name → Bedrock numeric id. Unknown names fall
@@ -240,6 +321,121 @@ impl RegistryRules {
     }
 }
 
+fn rule_output(rule: &BlockRule, states_dropped: bool) -> MappedBlock {
+    MappedBlock {
+        state: BlockState {
+            name: rule.name.clone(),
+            properties: rule.states.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        },
+        states_dropped,
+    }
+}
+
+/// The Bedrock → Java inverse of a [`RegistryRules`], derived from the one
+/// seed table so the directions cannot drift (same principle as
+/// [`RegistryRules::biome_names`]).
+///
+/// - `states`: Bedrock `name[k=v,…]` → Java name + properties. Built by
+///   iterating the Java-key-sorted `state_rules`, so when two Java states
+///   map to one Bedrock state (reverse collisions, counted by the
+///   generator) the alphabetically-first Java state wins — deterministic
+///   and documented.
+/// - `names`: Bedrock block name → Java name (alphabetically-first Java
+///   id over `block_rules` + `state_rules`), the fallback when an exact
+///   Bedrock state combo has no forward entry (e.g. a Bedrock-only state
+///   of a shared block): name survives, properties drop with a loss row.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReverseBlockRules {
+    states: BTreeMap<String, BlockState>,
+    names: BTreeMap<String, String>,
+}
+
+impl ReverseBlockRules {
+    pub fn build(rules: &RegistryRules) -> Self {
+        let mut out = Self::default();
+        for (java_key, rule) in &rules.block_rules {
+            out.names.entry(rule.name.clone()).or_insert_with(|| java_key.clone());
+        }
+        for (java_key, rule) in &rules.state_rules {
+            let (java_name, java_props) = parse_state_key(java_key);
+            let bedrock_props: Vec<(String, String)> =
+                rule.states.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let bedrock_key = state_key(&rule.name, &bedrock_props);
+            out.names.entry(rule.name.clone()).or_insert_with(|| java_name.clone());
+            out.states
+                .entry(bedrock_key)
+                .or_insert_with(|| BlockState { name: java_name, properties: java_props });
+        }
+        out
+    }
+
+    /// Map one Bedrock palette entry. Exact state inverse first, then the
+    /// name inverse (properties dropped with a loss row), then the
+    /// name-only passthrough (modded / unknown blocks; stateful entries
+    /// get one deduped loss row per name).
+    pub fn map_block(
+        &self,
+        bedrock: &BlockState,
+        reported: &mut BTreeSet<String>,
+        report: &mut ConversionReport,
+    ) -> MappedBlock {
+        let had_properties = !bedrock.properties.is_empty();
+        let key = state_key(&bedrock.name, &bedrock.properties);
+        if let Some(java) = self.states.get(&key) {
+            return MappedBlock { state: java.clone(), states_dropped: false };
+        }
+        if let Some(java_name) = self.names.get(&bedrock.name) {
+            if had_properties {
+                if reported.insert(bedrock.name.clone()) {
+                    report.record(
+                        LossKind::FieldDropped,
+                        format!("block {}", bedrock.name),
+                        "Bedrock state combo has no Java-table entry; properties \
+                         dropped, name mapped — extend tools/registry-gen and regenerate",
+                    );
+                }
+                return MappedBlock {
+                    state: BlockState { name: java_name.clone(), properties: Vec::new() },
+                    states_dropped: true,
+                };
+            }
+            return MappedBlock {
+                state: BlockState { name: java_name.clone(), properties: Vec::new() },
+                states_dropped: false,
+            };
+        }
+        if had_properties && reported.insert(bedrock.name.clone()) {
+            report.record(
+                LossKind::UnmappedId,
+                format!("block {}", bedrock.name),
+                "palette-entry properties dropped: no Bedrock→Java state inverse \
+                 (extend tools/registry-gen hand-maps and regenerate)",
+            );
+        }
+        MappedBlock {
+            state: BlockState { name: bedrock.name.clone(), properties: Vec::new() },
+            states_dropped: had_properties,
+        }
+    }
+}
+
+/// Split `name[k=v,k=v]` back into name + property pairs (the inverse of
+/// [`state_key`]). Keys and values cannot contain `[`, `]`, `,` or `=` in
+/// the registry data, so a plain scan is exact.
+fn parse_state_key(key: &str) -> (String, Vec<(String, String)>) {
+    let Some((name, rest)) = key.split_once('[') else {
+        return (key.to_string(), Vec::new());
+    };
+    let rest = rest.strip_suffix(']').unwrap_or(rest);
+    let mut props = Vec::new();
+    for part in rest.split(',') {
+        if let Some((k, v)) = part.split_once('=') {
+            props.push((k.to_string(), v.to_string()));
+        }
+    }
+    (name.to_string(), props)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,28 +448,41 @@ mod tests {
     }
 
     #[test]
-    fn seed_has_biome_ids_and_defaults() {
-        let rules = RegistryRules::default();
+    fn seed_has_biome_ids_and_defaults_and_no_rules() {
+        let rules = RegistryRules::seed();
         assert_eq!(rules.biome_ids.get("minecraft:plains"), Some(&1));
-        assert_eq!(rules.biome_ids.get("minecraft:ocean"), Some(&0));
         assert_eq!(rules.block_palette_version, DEFAULT_BLOCK_PALETTE_VERSION);
         assert!(rules.block_rules.is_empty());
+        assert!(rules.state_rules.is_empty());
+        assert!(rules.enchant_ids.is_empty());
+    }
+
+    #[test]
+    fn embedded_table_parses_and_covers_air() {
+        let rules = RegistryRules::embedded();
+        assert!(rules.version >= 1);
+        // Air resolves through passthrough without loss.
+        let mut report = ConversionReport::new();
+        let out = rules.map_block(&block("minecraft:air", &[]), &mut BTreeSet::new(), &mut report);
+        assert_eq!(out.state.name, "minecraft:air");
+        assert!(report.is_clean());
+        assert!(!rules.state_rules.is_empty(), "generated table carries state rules");
+        assert!(!rules.enchant_ids.is_empty(), "generated table carries enchantments");
     }
 
     #[test]
     fn stateless_block_passes_through_without_loss() {
-        let mut rules = RegistryRules::default();
+        let mut rules = RegistryRules::seed();
         rules.biome_ids.clear(); // irrelevant here
         let mut report = ConversionReport::new();
-        let mut seen = BTreeSet::new();
-        let out = rules.map_block(&block("minecraft:stone", &[]), &mut seen, &mut report);
+        let out = rules.map_block(&block("minecraft:stone", &[]), &mut BTreeSet::new(), &mut report);
         assert_eq!(out.state.name, "minecraft:stone");
         assert!(report.is_clean());
     }
 
     #[test]
     fn stateful_block_drops_properties_with_one_loss_per_name() {
-        let rules = RegistryRules::default();
+        let rules = RegistryRules::seed();
         let mut report = ConversionReport::new();
         let mut seen = BTreeSet::new();
         let stairs = block("minecraft:oak_stairs", &[("facing", "east"), ("half", "bottom")]);
@@ -285,8 +494,89 @@ mod tests {
     }
 
     #[test]
+    fn state_rule_maps_exact_combo() {
+        let mut rules = RegistryRules::seed();
+        rules.state_rules.insert(
+            "minecraft:oak_stairs[facing=east,half=top]".into(),
+            BlockRule {
+                name: "minecraft:oak_stairs".into(),
+                states: [("upside_down_bit".to_string(), "1b".to_string())].into_iter().collect(),
+            },
+        );
+        let mut report = ConversionReport::new();
+        let out = rules.map_block(
+            &block("minecraft:oak_stairs", &[("half", "top"), ("facing", "east")]),
+            &mut BTreeSet::new(),
+            &mut report,
+        );
+        assert_eq!(out.state.properties, vec![("upside_down_bit".to_string(), "1b".to_string())]);
+        assert!(!out.states_dropped);
+        assert!(report.is_clean());
+        // A different combo of the same block misses and stays honest.
+        let miss = rules.map_block(
+            &block("minecraft:oak_stairs", &[("facing", "east")]),
+            &mut BTreeSet::new(),
+            &mut report,
+        );
+        assert!(miss.states_dropped);
+        assert_eq!(report.count_with_kind(LossKind::UnmappedId), 1);
+    }
+
+    #[test]
+    fn reverse_state_rule_round_trips() {
+        let mut rules = RegistryRules::seed();
+        rules.state_rules.insert(
+            "minecraft:oak_stairs[facing=north,half=bottom]".into(),
+            BlockRule {
+                name: "minecraft:oak_stairs".into(),
+                states: [
+                    ("weirdo_direction".to_string(), "3".to_string()),
+                    ("upside_down_bit".to_string(), "0b".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        );
+        let reverse = rules.reverse();
+        let mut report = ConversionReport::new();
+        let out = reverse.map_block(
+            &block("minecraft:oak_stairs", &[("upside_down_bit", "0b"), ("weirdo_direction", "3")]),
+            &mut BTreeSet::new(),
+            &mut report,
+        );
+        assert_eq!(out.state.name, "minecraft:oak_stairs");
+        assert_eq!(
+            out.state.properties,
+            vec![("facing".to_string(), "north".to_string()), ("half".to_string(), "bottom".to_string())]
+        );
+        assert!(!out.states_dropped);
+        assert!(report.is_clean());
+    }
+
+    #[test]
+    fn reverse_static_rename_and_unmapped_passthrough() {
+        let mut rules = RegistryRules::seed();
+        rules.block_rules.insert(
+            "minecraft:bricks".into(),
+            BlockRule { name: "minecraft:brick_block".into(), states: Default::default() },
+        );
+        let reverse = rules.reverse();
+        let mut report = ConversionReport::new();
+        let out = reverse.map_block(&block("minecraft:brick_block", &[]), &mut BTreeSet::new(), &mut report);
+        assert_eq!(out.state.name, "minecraft:bricks");
+        // Modded blocks pass through by name; stateful ones report once.
+        let modded = block("panascais_caves:gloopstone", &[("goo", "1")]);
+        let mut seen = BTreeSet::new();
+        let first = reverse.map_block(&modded, &mut seen, &mut report);
+        let second = reverse.map_block(&modded, &mut seen, &mut report);
+        assert_eq!(first.state.name, "panascais_caves:gloopstone");
+        assert_eq!(report.count_with_kind(LossKind::UnmappedId), 1, "deduped per chunk");
+        assert!(second.states_dropped);
+    }
+
+    #[test]
     fn explicit_rule_maps_name_and_states() {
-        let mut rules = RegistryRules::default();
+        let mut rules = RegistryRules::seed();
         rules.block_rules.insert(
             "minecraft:oak_stairs".into(),
             BlockRule {
@@ -295,8 +585,7 @@ mod tests {
             },
         );
         let mut report = ConversionReport::new();
-        let mut seen = BTreeSet::new();
-        let out = rules.map_block(&stairs(), &mut seen, &mut report);
+        let out = rules.map_block(&stairs(), &mut BTreeSet::new(), &mut report);
         assert_eq!(out.state.properties, vec![("weirdo_direction".to_string(), "1".to_string())]);
         assert!(report.is_clean());
     }
@@ -339,6 +628,18 @@ mod tests {
         assert_eq!(rules.map_biome_to_java(&names, 999, &mut seen, &mut report), "minecraft:ocean");
         assert_eq!(rules.map_biome_to_java(&names, 999, &mut seen, &mut report), "minecraft:ocean");
         assert_eq!(report.count_with_kind(LossKind::UnmappedId), 1, "deduped per chunk");
+    }
+
+    #[test]
+    fn state_keys_are_sorted_and_parse_back() {
+        assert_eq!(state_key("minecraft:a", &[]), "minecraft:a");
+        assert_eq!(
+            state_key("minecraft:a", &[("b".into(), "1".into()), ("a".into(), "2".into())]),
+            "minecraft:a[a=2,b=1]"
+        );
+        let (name, props) = parse_state_key("minecraft:a[a=2,b=1]");
+        assert_eq!(name, "minecraft:a");
+        assert_eq!(props, vec![("a".to_string(), "2".to_string()), ("b".to_string(), "1".to_string())]);
     }
 
     fn stairs() -> BlockState {
