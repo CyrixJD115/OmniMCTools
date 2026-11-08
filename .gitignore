@@ -1,4 +1,10 @@
 /target
+# fuzz/ is its own cargo workspace (cargo-fuzz layout) with its own artifacts.
+# seeds/ is tracked; the grown corpus and crash artifacts are not.
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
 # Never commit real worlds or RE artifacts into the product repo.
 /tools/world-fixtures/*
 !/tools/world-fixtures/README.md

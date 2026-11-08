@@ -1,0 +1,50 @@
+# Own workspace root — deliberately NOT a member of the repo workspace one
+# level up (cargo-fuzz layout; fuzzing needs nightly, the repo is stable).
+[workspace]
+
+[package]
+name = "omt-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+omt-nbt = { path = "../crates/omt-nbt" }
+omt-java = { path = "../crates/omt-java" }
+omt-bedrock = { path = "../crates/omt-bedrock" }
+
+# Prevent this workspace's lints config from mattering; targets are build-only.
+[lints.rust]
+unsafe_code = "forbid"
+
+[[bin]]
+name = "fuzz_nbt_reader"
+path = "fuzz_targets/fuzz_nbt_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_region_reader"
+path = "fuzz_targets/fuzz_region_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_subchunk_codec"
+path = "fuzz_targets/fuzz_subchunk_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_leveldb_key"
+path = "fuzz_targets/fuzz_leveldb_key.rs"
+test = false
+doc = false
+bench = false
