@@ -74,6 +74,8 @@ pub enum SubchunkError {
     Nbt(#[from] omt_nbt::Error),
     #[error("palette entry #{0} has no \"name\" string")]
     PaletteNoName(usize),
+    #[error("packed storage declares 4096 indices but an empty palette (nothing to resolve against)")]
+    EmptyPalette,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -141,6 +143,11 @@ impl Data3d {
                 .u32()
                 .map_err(|e| Data3dError::Subchunk { slot, reason: e.to_string() })?
                 as usize;
+            if count == 0 {
+                // Malformed: indices declared but no palette to resolve them
+                // (found by fuzz_subchunk_codec; serializer can't express it).
+                return Err(Data3dError::Subchunk { slot, reason: "empty biome palette".into() });
+            }
             let mut palette = Vec::with_capacity(count.min(256));
             for _ in 0..count {
                 let mut b = [0u8; 4];
@@ -163,7 +170,10 @@ impl Data3d {
             match sc {
                 SubchunkBiomes::NonExistent => out.push(0xff),
                 SubchunkBiomes::Storage { palette, indices, bits } => {
-                    if palette.len() <= 1 {
+                    if palette.len() <= 1 && indices.is_none() {
+                        // Canonical uniform slot. A Storage carrying indices
+                        // (lenient parse of non-canonical but valid data)
+                        // must keep its bits so decode⇄encode round-trips.
                         out.push(0x01);
                         out.extend_from_slice(&palette.first().copied().unwrap_or(0).to_le_bytes());
                     } else {
@@ -298,6 +308,12 @@ fn parse_storage(r: &mut Reader<'_>) -> Result<SubchunkStorage, SubchunkError> {
     // bits == 0: exactly one palette entry, written WITHOUT a count prefix
     // (fixture-verified: header 0x00 then `0a 00 00 08 …` directly).
     let count = if bits == 0 { 1 } else { r.u32()? as usize };
+    if bits > 0 && count == 0 {
+        // Malformed: 4096 indices declared but no palette to resolve them
+        // against. The serializer cannot express this shape (found by
+        // fuzz_subchunk_codec — see fuzz/README.md), so reject it here.
+        return Err(SubchunkError::EmptyPalette);
+    }
     let mut palette = Vec::with_capacity(count.min(65536));
     let mut raw_entries = Vec::with_capacity(count.min(65536));
     for i in 0..count {
@@ -338,10 +354,17 @@ fn parse_storage(r: &mut Reader<'_>) -> Result<SubchunkStorage, SubchunkError> {
 }
 
 fn serialize_storage(out: &mut Vec<u8>, storage: &SubchunkStorage) {
-    let bits = if storage.palette.len() <= 1 {
-        0
+    // Canonical single-entry storages carry bits == 0 and no indices. If a
+    // decoded storage *does* carry indices with a small palette (lenient
+    // parse of a non-canonical but self-consistent payload), keep its raw
+    // bits so decode⇄encode round-trips (fuzz_subchunk_codec invariant).
+    let bits = if storage.indices.is_some() {
+        storage
+            .bits
+            .max(min_bits(storage.palette.len().saturating_sub(1)))
+            .max(1)
     } else {
-        storage.bits.max(min_bits(storage.palette.len() - 1))
+        0
     };
     out.push(bits << 1);
     if bits > 0 {
