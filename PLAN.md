@@ -13,7 +13,15 @@
 
 ---
 
-## 0. Progress ledger (updated 2026-10-23 — **M0–M2 done, M3 is next**)
+## 0. Progress ledger (updated 2026-11-08 — **M0–M3 done both directions; 26.3 real-fixture support landed**)
+
+**2026-11-08 — REAL Java 26.3 fixture intake + support landed (`world_ref/java-26.3`, DataVersion 5023 = 26.3 final; never committed, integrity manifest beside it). Byte-level verified format facts:**
+- **Save layout restructured (26.3):** every dimension under `dimensions/minecraft/<dim>/{region,entities,poi,data}` (the `minecraft` segment is a namespace dir); root `region/`+`DIM-1`/`DIM1` and `playerdata/` are gone; players moved to `players/{data,stats,advancements}/<uuid>.dat|json`; per-dim `data/minecraft/{chunk_tickets,raids,world_border}.dat`; world-root `data/minecraft/{game_rules,custom_boss_events,random_sequences,scheduled_events,scoreboard,stopwatches,wandering_trader,weather,world_clocks,world_gen_settings}.dat` — **gamerules left level.dat**.
+- **level.dat (Data) new shape:** `spawn{pos:[I;x,y,z], pitch, yaw, dimension}`, `difficulty_settings{difficulty,hardcore,locked}`, `version_history:List<Int>`, `singleplayer_uuid:[I;4]`, `WasModded`, `initialized`; **no `GameRules`, no inline `Player`**. Legacy flat `SpawnX/SpawnZ` handled by `omt_world::java_spawn_xz` (both eras).
+- **Block palette flattened (26.3) — caught because the real world decoded all-air:** `block_states.palette` is `List<String>` when every entry is default-state; otherwise `List<Compound>` with EXACTLY two entry shapes: `{ "": name }` (property-less, empty-named string field) and `{ id: name, properties: {…} }` (all-String values). The capitalized `Name`/`Properties` keys never appear in 26.3 chunks (entry census: 91,659 vs 55,254 vs 0 legacy across 3 regions). Biomes UNCHANGED (`palette: List<String>` + optional `data`). Era-aware reader `omt_java::java_palette_entry` accepts all shapes (browse path defaults malformed to air; converter path types the error); `omt-convert::chunk_java` uses it too.
+- **Unchanged:** region container (8 KiB header, zlib 2), chunk NBT root incl. `isLightOn` (the game writes it — §7 row resolved), 4 packed heightmaps ×37 longs, `Status: minecraft:full`, `yPos −4`, **entity-region root `{Position:IntArray, DataVersion, Entities}` exactly as M3b writes it**.
+- **As built:** `omt_java::JavaLayout::{Classic,Namespaced}` + `detect()` (root `dimensions/` presence, coarse hint) + per-dimension dual-layout resolution (`resolve_dim_dir`: namespaced `minecraft` namespace first, other namespaces scanned — modded-safe — then classic, first existing wins); `JavaWorld::{dimension_dir,entity_dimension_dir}` resolve per detected layout; `players/data` ⇄ `playerdata`; classic worlds keep working (read floor stays 2865). `omt inspect` prints the resolved region path + layout era; `omt chunks` notes unexplored dimensions; `read_raw(Chunk)` now honors the node's dimension (was hardcoded 0). Synthetic harness covers both layouts (`synthetic_world_26_namespaced_roundtrip`, `palette_entry_shapes`); fixture e2e `omt-java/tests/java26_fixture.rs` (`#[ignore]`, `OMT_JAVA_FIXTURE` or `../../world_ref/java-26.3`) opens the real world, enumerates, decodes a full chunk incl. properties + heightmaps + players — **passes (2.85 s)**. `make_demo_world` emits the 26.3 layout. Registry pin → **26.3 / 5023** (Chunker's 5017 is 26.3-pre-1; don't pin). 124 workspace tests green, 0 warnings, clippy clean in touched files; both omt-convert fixture e2es still pass (18.8 s / release run). `tools/registry-gen` client.jar side now unblocked (26.3 jar pinned at `Source/RE/client-26.3/`, SHA1 verified).
+
 
 | Milestone | Status | Evidence |
 |---|---|---|
@@ -68,7 +76,7 @@ One Java format generation (**1.18+ sections/`block_states`**, in practice 1.20.
 
 ## 2. Version registry (the trick that keeps scope small)
 
-`crates/omt-versions/registry.ron` — single source of truth, bump per Minecraft release. **Exists since M0; current pins are fixture-derived** (Bedrock `lastOpenedWithVersion` 1.26.52.3.0, storage version 10, chunk version 42). Java pins are provisional until M3 pins a `client.jar` (the enforced read floor 2865 = 1.18 is what gates reads today).
+`crates/omt-versions/registry.ron` — single source of truth, bump per Minecraft release. **Exists since M0; current pins:** Bedrock fixture-derived (1.26.52, storage version 10, chunk version 42); **Java pinned 2026-11-08 to 26.3 / DataVersion 5023** (verified against the real `world_ref/java-26.3` fixture; `client.jar` 26.3 pinned at `Source/RE/client-26.3/`). The enforced read floor 2865 = 1.18 is what gates reads today.
 
 ```rust
 pub struct EditionVersions {
@@ -276,17 +284,18 @@ Screens: **Home** (world list + open) → **Workspace** per world with sidebar: 
 | Java **heightmap column order** (z-major assumed) | data3D side empirically verified z-major (99.6%, probe); Java side assumed same order + same +1 encoding (numeric values then copy 1:1). Wrong order = transposed heightmap — single-function fix. | open — verify when Java fixture lands (converter warns via loss rows only if absent) |
 | Universal-model order mixing (Java YZX vs Bedrock XZY) | ~~latent: Bedrock reads copied XZY into YZX-typed `Slice`~~ ✅ fixed 2026-11-04 — normalized XZY→YZX at the store boundary; permutation round-trip + absolute-position tests in `omt_world::packing`; e2e fixture test asserts through both permutations |
 | Java **pre-1.16 continuous packing** in the old unpacker | ~~latent: `unpack_java_indices` read the pre-1.16 continuous stream~~ ✅ fixed 2026-11-04 — rewritten non-spanning per wiki.vg in `omt_world::packing` (our read floor is 1.18, where non-spanning is the layout); known-vector tests pin the long-boundary behavior |
-| Java **entity-region container/layout** (M3b writes `entities/r.x.z.mca`, zlib scheme 2) | Container + per-chunk root shape are UMT-verified (findings Task C) + wiki *Entity format*; zlib is what the official client writes per wiki *Region file format* (LZ4 is server-opt-in). Folder layout: writer mirrors our reader (`entities/`, `DIM-1/entities`, `DIM1/entities`) — the 2026 wiki *Entity format* page also describes a `dimensions/minecraft/<dim>/entities` phrasing, unresolvable without a Java fixture. One-function fix when one lands. | open — verify when Java fixture lands |
-| Java **chunk-root fields we omit** (`isLightOn`, `LastUpdate`, `structures`; empty `PostProcessing`) | The game fills defaults for optional fields (assumption; cannot verify without a runtime). `isLightOn` omitted on purpose: OMT does not compute light, and the modern chunk-format page does not list it as required. If a real Java fixture proves otherwise, the writer gains the fields in one place (`chunk_to_java.rs`). | open (documented assumption) |
+| Java **entity-region container/layout** (M3b writes `entities/r.x.z.mca`, zlib scheme 2) | ~~Folder layout unresolvable without a Java fixture~~ **✅ RESOLVED 2026-11-08** — the real 26.3 fixture carries entity regions at `dimensions/minecraft/<dim>/entities/` with root `{Position:IntArray, DataVersion, Entities}` exactly as M3b writes them. Remaining (small): the converter's Java *targets* still write the classic layout (`entities/`, `DIM-1/entities`) while its reader accepts both; whether a 26.3 client still opens classic-layout folders is unverifiable without a runtime — switch the writer when decided. | reader ✅; writer layout decision pending in-game check |
+| Java **chunk-root fields we omit** (`isLightOn`, `LastUpdate`, `structures`; empty `PostProcessing`) | Fixture-verified 2026-11-08: the game DOES write `isLightOn`, `LastUpdate` and `structures` in every chunk root. OMT still omits them (assumption: the game fills defaults / relights on load — unverifiable without a runtime). If a target game proves it matters, the writer gains the fields in one place (`chunk_to_java.rs`). | open (assumption sharpened) |
+| Java **26.3 flattened block palette** (writer side) | Reader accepts all eras (`java_palette_entry`); the converter's Java-chunk *writer* still emits legacy `{Name, Properties}` compounds. 26.3 also writes `List<String>` / `{ "" }` / `{ id, properties }` — whether the 26.3 client still READS legacy-shaped palettes is unverifiable here. If ever needed, the writer switches shapes in one place (`chunk_to_java.rs` palette emit). | open (writer is legacy-shape) |
 | Bedrock actors written to Java **without a UUID** | Probe-verified: Bedrock actors carry no UUID (only `UniqueID` Long). OMT renames `identifier`→`id` and writes actors UUID-less, reporting each chunk's count — never inventing ids. Whether the target game assigns identities on load is unverifiable here (no runtime). | open — verify in-game when a runtime/Java fixture is available |
 
 ## 8. Test-world fixtures (what to provide, when)
 
-User-provided; drop into `tools/world-fixtures/` (never commit publicly). **Status:** three Bedrock 1.26.52 worlds provided and in use at `world_ref/` (`e1j7l0I-l68=` "Base", `eCs-bHSnfhQ=` "Alt Settings", `jQS+FzM7v-0=` "Exp" — behavior-pack content included). **Java fixture still needed (gates M3–M6 acceptance).**
+User-provided; drop into `tools/world-fixtures/` (never commit publicly). **Status:** three Bedrock 1.26.52 worlds provided and in use at `world_ref/` (`e1j7l0I-l68=` "Base", `eCs-bHSnfhQ=` "Alt Settings", `jQS+FzM7v-0=` "Exp" — behavior-pack content included). **Java fixture PROVIDED 2026-11-08**: `world_ref/java-26.3` (Prism 26.3 survival, "Omni MC Tools", DataVersion 5023, integrity manifest `world_ref/java-26.3.sha256manifest`) — currently spawn-area only (~6.9k chunks, nether/end dirs unexplored); user keeps filling the checklist below.
 
 | Fixture | Requirements | Needed by |
 |---|---|---|
-| `java-latest.vanilla` | Fresh survival world, current release; ~10 chunks explored; a village/monument; chests w/ enchanted+named items+books; signs; maps; one of each: furnace, barrel, item frame, boat/minecart; all 3 dims entered | **M3–M6 (missing)** |
+| `java-latest.vanilla` | Fresh survival world, current release; ~10 chunks explored; a village/monument; chests w/ enchanted+named items+books; signs; maps; one of each: furnace, barrel, item frame, boat/minecart; all 3 dims entered | **provided 2026-11-08 — checklist content still accumulating (nether/end visit, chests, signs, frames)** |
 | `bedrock-win.latest` | Windows Bedrock world, same content checklist as above | ✅ provided (×3, at `world_ref/`) |
 | `bedrock-android.latest` | Android world (copy `minecraftWorlds/<id>` via file manager/adb), same checklist | M1 parity (optional now — folder layout proven identical) |
 | `*.mcworld` export of `bedrock-win.latest` | template + world variants | M1 archive open (TODO) |
@@ -295,7 +304,7 @@ User-provided; drop into `tools/world-fixtures/` (never commit publicly). **Stat
 
 ## 9. Milestone order & rough sizes
 
-M0 nbt (S) ✅ → M1 world-open (L) ✅ → M2 nbt-editor (M) ✅ → **M3 registry+converter-core (XL) ← next** → M4 entities/items (L) → M5 pruner (M) → M6 render (L) → M7 ldb+ext (M) → M8 polish/release (M). CLI ships every milestone; GUI became usable at M2, good at M6.
+M0 nbt (S) ✅ → M1 world-open (L) ✅ → M2 nbt-editor (M) ✅ → M3 registry+converter-core (XL) ✅ core both directions; registry-gen next → **M4 entities/items/level.dat (L) ← next** → M5 pruner (M) → M6 render (L) → M7 ldb+ext (M) → M8 polish/release (M). CLI ships every milestone; GUI became usable at M2, good at M6.
 
 ## 10. REA workflow for implementation-time questions
 
