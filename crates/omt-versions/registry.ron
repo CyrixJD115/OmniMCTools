@@ -1,10 +1,11 @@
 (
     // Bedrock pins derived from the supplied `world_ref` fixtures
     // (level.dat lastOpenedWithVersion = 1.26.52.3.0, storage version 10).
-    // Java pins are provisional until M3 pins a client.jar (PLAN.md §7);
-    // the enforced floor (2865 = 1.18) is what gates reads today.
-    java_data_version: 4440,
-    java_release: "26.2",
+    // Java pins: 26.3 = current stable release (DataVersion 5023 verified
+    // against the world_ref/java-26.3 fixture level.dat + chunk roots,
+    // 2026-11-08). Floor stays 2865 = 1.18 (sections era) — PLAN.md §2/§7.
+    java_data_version: 5023,
+    java_release: "26.3",
     java_min_data_version: 2865,
     bedrock_level_version: (1, 26, 52, 3, 0),
     bedrock_subchunk_palette: 9,
