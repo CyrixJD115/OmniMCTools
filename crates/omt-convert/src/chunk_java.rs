@@ -26,7 +26,9 @@ pub struct JavaBiomes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JavaSection {
     pub y: i8,
-    /// Block palette (`Name` + optional `Properties`).
+    /// Block palette (1.18–1.25 `{Name, Properties}` compounds; 26.3 also
+    /// writes `List<String>` and `{ "" | id, properties }` entries — see
+    /// [`omt_java::java_palette_entry`]).
     pub palette: Vec<BlockState>,
     /// 4096 palette indices, YZX order (Java native).
     pub indices: Vec<u16>,
@@ -95,23 +97,15 @@ pub fn parse_java_chunk(nbt: &Nbt) -> Result<JavaChunk> {
             let mut palette = Vec::new();
             if let Some(Tag::List(entries)) = bs.get("palette") {
                 for entry in entries {
-                    let name = entry
-                        .get("Name")
-                        .and_then(Tag::as_str)
-                        .ok_or(ConvertError::BadField {
+                    // Era-aware parse (see `omt_java::java_palette_entry`):
+                    // 1.18–1.25 `{Name, Properties}` compounds and 26.3
+                    // `List<String>` / `{ "" }` / `{ id, properties }` shapes.
+                    palette.push(omt_java::java_palette_entry(entry).ok_or(
+                        ConvertError::BadField {
                             field: "palette.Name",
-                            detail: "block palette entry without a Name string".into(),
-                        })?
-                        .to_string();
-                    let mut properties = Vec::new();
-                    if let Some(Tag::Compound(props)) = entry.get("Properties") {
-                        for (k, v) in props {
-                            if let Tag::String(s) = v {
-                                properties.push((k.clone(), s.clone()));
-                            }
-                        }
-                    }
-                    palette.push(BlockState { name, properties });
+                            detail: "block palette entry without a recognized name shape".into(),
+                        },
+                    )?);
                 }
             }
             let indices = match bs.get("data") {
