@@ -6,6 +6,7 @@ mod convert_cmd;
 mod inspect;
 mod ldb;
 mod nbt_cmd;
+mod registry_cmd;
 
 use clap::Parser;
 
@@ -35,6 +36,8 @@ enum Command {
     Ldb(ldb::Args),
     /// Conversion tools (item stacks; grows with M3/M4).
     Convert(convert_cmd::Args),
+    /// Inspect the embedded semantic registry table (`stats`).
+    Registry(registry_cmd::Args),
 }
 
 fn main() {
@@ -46,6 +49,7 @@ fn main() {
         Command::Chunk(args) => chunk::run(&args),
         Command::Ldb(args) => ldb::run(&args),
         Command::Convert(args) => convert_cmd::run(&args),
+        Command::Registry(args) => registry_cmd::run(args),
     };
     if let Err(err) = result {
         eprintln!("error: {err}");

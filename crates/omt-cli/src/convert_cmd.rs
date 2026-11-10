@@ -140,7 +140,9 @@ fn run_chunks(
     let direction = if to_java { Direction::ToJava } else { Direction::ToBedrock };
     let rules = match &rules {
         Some(path) => load_rules(path).map_err(|e| format!("rule table: {e}"))?,
-        None => omt_convert::RegistryRules::default(),
+        // The embedded generated table (tools/registry-gen output) is the
+        // production default; --rules overrides it wholesale.
+        None => omt_convert::RegistryRules::embedded().clone(),
     };
     let opts = omt_convert::ConvertOptions {
         filter: omt_convert::ProtoFilter::new(!keep_proto),
@@ -229,11 +231,17 @@ fn run_item_stack(
     };
     let tag = from_snbt(&input).map_err(|e| format!("invalid SNBT: {e}"))?;
 
+    // Enchantment ids come from the embedded registry table (empty before
+    // registry-gen existed; unmapped ids still drop with a loss row).
+    let item_opts = ItemConvertOpts {
+        enchant_ids: omt_convert::RegistryRules::embedded().enchant_id_map(),
+        ..ItemConvertOpts::default()
+    };
     let (out, report): (Tag, ConversionReport) = if to_bedrock {
-        java_stack_to_bedrock(&tag, &ItemConvertOpts::default())?
+        java_stack_to_bedrock(&tag, &item_opts)?
     } else {
         let era = if legacy_java { StackEra::Legacy } else { StackEra::Components };
-        bedrock_stack_to_java(&tag, era, &ItemConvertOpts::default())?
+        bedrock_stack_to_java(&tag, era, &item_opts)?
     };
 
     if !report.is_clean() {
