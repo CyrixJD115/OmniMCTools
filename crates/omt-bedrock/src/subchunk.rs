@@ -396,13 +396,42 @@ fn serialize_storage(out: &mut Vec<u8>, storage: &SubchunkStorage) {
             out.push(10); // TAG_Compound "states"
             push_len_prefixed(out, "states");
             for (k, v) in &state.properties {
-                out.push(8);
-                push_len_prefixed(out, k);
-                push_len_prefixed(out, v);
+                write_state_value(out, k, v);
             }
             out.push(0); // end states compound
         }
         out.push(0); // end entry compound
+    }
+}
+
+/// Write one state property. Bedrock states are typed (int/byte/string —
+/// fixture-verified palette census, `examples/paletteprobe.rs`); values in
+/// the canonical SNBT scalar forms the registry rule table keys on
+/// (`3`, `1b`, `0b`) are written back as their NBT scalar types, anything
+/// else stays a TAG_String. A string value that merely looks numeric
+/// cannot occur in registry data (the generator's canonical forms never
+/// produce one; fixture-verified across all 1.26.50 registry states).
+fn write_state_value(out: &mut Vec<u8>, key: &str, value: &str) {
+    let scalar = match omt_nbt::snbt::from_snbt(value) {
+        Ok(tag @ (Tag::Byte(_)
+        | Tag::Short(_)
+        | Tag::Int(_)
+        | Tag::Long(_)
+        | Tag::Float(_)
+        | Tag::Double(_))) => Some(tag),
+        _ => None,
+    };
+    match scalar {
+        Some(tag) => {
+            out.push(tag.id());
+            push_len_prefixed(out, key);
+            omt_nbt::write::push_payload_pub(out, &tag);
+        }
+        None => {
+            out.push(8);
+            push_len_prefixed(out, key);
+            push_len_prefixed(out, value);
+        }
     }
 }
 
@@ -485,6 +514,40 @@ mod tests {
     }
 
     #[test]
+    fn typed_state_values_round_trip() {
+        // Canonical SNBT scalar forms (registry rule-table keys) must
+        // serialize to Bedrock's typed palette states, not strings.
+        let stairs = BlockState {
+            name: "minecraft:oak_stairs".into(),
+            properties: vec![
+                ("minecraft:corner".into(), "none".into()),
+                ("upside_down_bit".into(), "0b".into()),
+                ("weirdo_direction".into(), "3".into()),
+            ],
+        };
+        let sc = Subchunk {
+            version: 9,
+            y: 0,
+            storages: vec![SubchunkStorage {
+                palette: vec![stairs],
+                raw_entries: None,
+                indices: None,
+                bits: 0,
+            }],
+        };
+        let bytes = sc.serialize();
+        let back = Subchunk::parse(&bytes, Some(0)).unwrap();
+        assert_eq!(strip_raw(back.clone()), sc);
+        // Byte-level: the int value is a bare TAG_Int payload, the bool a
+        // TAG_Byte — not the string forms.
+        let raw = &bytes[4..];
+        assert!(raw.contains(&3u8), "TAG_Int payload byte present");
+        // Re-encoding the decoded model keeps the typed shapes stable.
+        let again = Subchunk::parse(&back.serialize(), Some(0)).unwrap();
+        assert_eq!(strip_raw(again), sc);
+    }
+
+    #[test]
     fn single_palette_roundtrip() {
         let sc = Subchunk {
             version: 9,
@@ -512,7 +575,9 @@ mod tests {
             stone(),
             BlockState {
                 name: "minecraft:oak_leaves".into(),
-                properties: vec![("persistent".into(), "true".into())],
+                // Canonical byte form: the writer re-types SNBT scalars, so
+                // palette states round-trip through typed NBT (fixture form).
+                properties: vec![("persistent".into(), "1b".into())],
             },
         ];
         let mut indices = vec![0u16; 4096];
