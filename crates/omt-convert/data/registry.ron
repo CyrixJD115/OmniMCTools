@@ -15,8 +15,16 @@
 (
     version: 1,
     block_rules: {
+        "minecraft:air": (
+            name: "minecraft:air",
+            states: {},
+        ),
         "minecraft:bricks": (
             name: "minecraft:brick_block",
+            states: {},
+        ),
+        "minecraft:cave_air": (
+            name: "minecraft:air",
             states: {},
         ),
         "minecraft:cobweb": (
@@ -29,6 +37,10 @@
         ),
         "minecraft:dirt_path": (
             name: "minecraft:grass_path",
+            states: {},
+        ),
+        "minecraft:end_stone_bricks": (
+            name: "minecraft:end_bricks",
             states: {},
         ),
         "minecraft:frogspawn": (
@@ -77,6 +89,10 @@
         ),
         "minecraft:terracotta": (
             name: "minecraft:hardened_clay",
+            states: {},
+        ),
+        "minecraft:void_air": (
+            name: "minecraft:air",
             states: {},
         ),
         "minecraft:waxed_copper_block": (
@@ -13794,19 +13810,19 @@
         "minecraft:beetroots[age=1]": (
             name: "minecraft:beetroot",
             states: {
-                "growth": "1",
+                "growth": "2",
             },
         ),
         "minecraft:beetroots[age=2]": (
             name: "minecraft:beetroot",
             states: {
-                "growth": "2",
+                "growth": "4",
             },
         ),
         "minecraft:beetroots[age=3]": (
             name: "minecraft:beetroot",
             states: {
-                "growth": "3",
+                "growth": "7",
             },
         ),
         "minecraft:bell[attachment=ceiling,facing=east,powered=false]": (
@@ -59583,6 +59599,186 @@
                 "powered_bit": "1b",
             },
         ),
+        "minecraft:copper_chain[axis=x,waterlogged=false]": (
+            name: "minecraft:copper_chain",
+            states: {
+                "pillar_axis": "x",
+            },
+        ),
+        "minecraft:copper_chain[axis=x,waterlogged=true]": (
+            name: "minecraft:copper_chain",
+            states: {
+                "pillar_axis": "x",
+            },
+        ),
+        "minecraft:copper_chain[axis=y,waterlogged=false]": (
+            name: "minecraft:copper_chain",
+            states: {
+                "pillar_axis": "y",
+            },
+        ),
+        "minecraft:copper_chain[axis=y,waterlogged=true]": (
+            name: "minecraft:copper_chain",
+            states: {
+                "pillar_axis": "y",
+            },
+        ),
+        "minecraft:copper_chain[axis=z,waterlogged=false]": (
+            name: "minecraft:copper_chain",
+            states: {
+                "pillar_axis": "z",
+            },
+        ),
+        "minecraft:copper_chain[axis=z,waterlogged=true]": (
+            name: "minecraft:copper_chain",
+            states: {
+                "pillar_axis": "z",
+            },
+        ),
+        "minecraft:copper_chest[facing=east,type=left,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_chest[facing=east,type=left,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_chest[facing=east,type=right,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_chest[facing=east,type=right,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_chest[facing=east,type=single,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_chest[facing=east,type=single,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_chest[facing=north,type=left,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_chest[facing=north,type=left,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_chest[facing=north,type=right,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_chest[facing=north,type=right,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_chest[facing=north,type=single,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_chest[facing=north,type=single,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_chest[facing=south,type=left,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_chest[facing=south,type=left,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_chest[facing=south,type=right,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_chest[facing=south,type=right,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_chest[facing=south,type=single,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_chest[facing=south,type=single,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_chest[facing=west,type=left,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_chest[facing=west,type=left,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_chest[facing=west,type=right,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_chest[facing=west,type=right,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_chest[facing=west,type=single,waterlogged=false]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_chest[facing=west,type=single,waterlogged=true]": (
+            name: "minecraft:copper_chest",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
         "minecraft:copper_door[facing=east,half=lower,hinge=left,open=false,powered=false]": (
             name: "minecraft:copper_door",
             states: {
@@ -60157,6 +60353,198 @@
                 "minecraft:cardinal_direction": "south",
                 "open_bit": "1b",
                 "upper_block_bit": "1b",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=running,facing=east,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=running,facing=east,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=running,facing=north,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=running,facing=north,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=running,facing=south,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=running,facing=south,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=running,facing=west,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=running,facing=west,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=sitting,facing=east,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=sitting,facing=east,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=sitting,facing=north,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=sitting,facing=north,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=sitting,facing=south,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=sitting,facing=south,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=sitting,facing=west,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=sitting,facing=west,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=standing,facing=east,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=standing,facing=east,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=standing,facing=north,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=standing,facing=north,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=standing,facing=south,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=standing,facing=south,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=standing,facing=west,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=standing,facing=west,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=star,facing=east,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=star,facing=east,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "east",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=star,facing=north,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=star,facing=north,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "north",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=star,facing=south,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=star,facing=south,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "south",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=star,facing=west,waterlogged=false]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "west",
+            },
+        ),
+        "minecraft:copper_golem_statue[copper_golem_pose=star,facing=west,waterlogged=true]": (
+            name: "minecraft:copper_golem_statue",
+            states: {
+                "minecraft:cardinal_direction": "west",
             },
         ),
         "minecraft:copper_grate[waterlogged=false]": (
@@ -107346,6 +107734,90 @@
                 "minecraft:cardinal_direction": "west",
             },
         ),
+        "minecraft:jigsaw[orientation=down_east]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "0",
+                "rotation": "3",
+            },
+        ),
+        "minecraft:jigsaw[orientation=down_north]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "0",
+                "rotation": "0",
+            },
+        ),
+        "minecraft:jigsaw[orientation=down_south]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "0",
+                "rotation": "2",
+            },
+        ),
+        "minecraft:jigsaw[orientation=down_west]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "0",
+                "rotation": "1",
+            },
+        ),
+        "minecraft:jigsaw[orientation=east_up]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "5",
+                "rotation": "0",
+            },
+        ),
+        "minecraft:jigsaw[orientation=north_up]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "2",
+                "rotation": "0",
+            },
+        ),
+        "minecraft:jigsaw[orientation=south_up]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "3",
+                "rotation": "0",
+            },
+        ),
+        "minecraft:jigsaw[orientation=up_east]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "1",
+                "rotation": "1",
+            },
+        ),
+        "minecraft:jigsaw[orientation=up_north]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "1",
+                "rotation": "0",
+            },
+        ),
+        "minecraft:jigsaw[orientation=up_south]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "1",
+                "rotation": "2",
+            },
+        ),
+        "minecraft:jigsaw[orientation=up_west]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "1",
+                "rotation": "3",
+            },
+        ),
+        "minecraft:jigsaw[orientation=west_up]": (
+            name: "minecraft:jigsaw",
+            states: {
+                "facing_direction": "4",
+                "rotation": "0",
+            },
+        ),
         "minecraft:jukebox[has_record=false]": (
             name: "minecraft:jukebox",
             states: {},
@@ -111811,93 +112283,93 @@
             },
         ),
         "minecraft:lava[level=10]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "10",
             },
         ),
         "minecraft:lava[level=11]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "11",
             },
         ),
         "minecraft:lava[level=12]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "12",
             },
         ),
         "minecraft:lava[level=13]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "13",
             },
         ),
         "minecraft:lava[level=14]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "14",
             },
         ),
         "minecraft:lava[level=15]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "15",
             },
         ),
         "minecraft:lava[level=1]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "1",
             },
         ),
         "minecraft:lava[level=2]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "2",
             },
         ),
         "minecraft:lava[level=3]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "3",
             },
         ),
         "minecraft:lava[level=4]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "4",
             },
         ),
         "minecraft:lava[level=5]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "5",
             },
         ),
         "minecraft:lava[level=6]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "6",
             },
         ),
         "minecraft:lava[level=7]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "7",
             },
         ),
         "minecraft:lava[level=8]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "8",
             },
         ),
         "minecraft:lava[level=9]": (
-            name: "minecraft:flowing_lava",
+            name: "minecraft:lava",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "9",
             },
         ),
         "minecraft:lava_cauldron": (
@@ -233512,6 +233984,12 @@
                 "minecraft:cardinal_direction": "west",
             },
         ),
+        "minecraft:smooth_quartz": (
+            name: "minecraft:smooth_quartz",
+            states: {
+                "pillar_axis": "y",
+            },
+        ),
         "minecraft:smooth_quartz_slab[type=bottom,waterlogged=false]": (
             name: "minecraft:smooth_quartz_slab",
             states: {
@@ -244271,7 +244749,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=inner_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "0b",
@@ -244279,7 +244757,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=inner_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "0b",
@@ -244287,7 +244765,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=inner_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "0b",
@@ -244295,7 +244773,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=inner_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "0b",
@@ -244303,7 +244781,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=outer_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "0b",
@@ -244311,7 +244789,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=outer_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "0b",
@@ -244319,7 +244797,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=outer_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "0b",
@@ -244327,7 +244805,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=outer_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "0b",
@@ -244335,7 +244813,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=straight,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "0b",
@@ -244343,7 +244821,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=bottom,shape=straight,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "0b",
@@ -244351,7 +244829,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=inner_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "1b",
@@ -244359,7 +244837,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=inner_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "1b",
@@ -244367,7 +244845,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=inner_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "1b",
@@ -244375,7 +244853,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=inner_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "1b",
@@ -244383,7 +244861,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=outer_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "1b",
@@ -244391,7 +244869,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=outer_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "1b",
@@ -244399,7 +244877,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=outer_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "1b",
@@ -244407,7 +244885,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=outer_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "1b",
@@ -244415,7 +244893,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=straight,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "1b",
@@ -244423,7 +244901,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=east,half=top,shape=straight,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "1b",
@@ -244431,7 +244909,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=inner_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "0b",
@@ -244439,7 +244917,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=inner_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "0b",
@@ -244447,7 +244925,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=inner_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "0b",
@@ -244455,7 +244933,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=inner_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "0b",
@@ -244463,7 +244941,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=outer_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "0b",
@@ -244471,7 +244949,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=outer_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "0b",
@@ -244479,7 +244957,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=outer_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "0b",
@@ -244487,7 +244965,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=outer_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "0b",
@@ -244495,7 +244973,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "0b",
@@ -244503,7 +244981,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=bottom,shape=straight,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "0b",
@@ -244511,7 +244989,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=inner_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "1b",
@@ -244519,7 +244997,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=inner_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "1b",
@@ -244527,7 +245005,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=inner_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "1b",
@@ -244535,7 +245013,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=inner_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "1b",
@@ -244543,7 +245021,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=outer_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "1b",
@@ -244551,7 +245029,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=outer_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "1b",
@@ -244559,7 +245037,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=outer_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "1b",
@@ -244567,7 +245045,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=outer_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "1b",
@@ -244575,7 +245053,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=straight,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "1b",
@@ -244583,7 +245061,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=north,half=top,shape=straight,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "1b",
@@ -244591,7 +245069,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=inner_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "0b",
@@ -244599,7 +245077,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=inner_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "0b",
@@ -244607,7 +245085,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=inner_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "0b",
@@ -244615,7 +245093,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=inner_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "0b",
@@ -244623,7 +245101,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=outer_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "0b",
@@ -244631,7 +245109,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=outer_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "0b",
@@ -244639,7 +245117,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=outer_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "0b",
@@ -244647,7 +245125,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=outer_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "0b",
@@ -244655,7 +245133,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=straight,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "0b",
@@ -244663,7 +245141,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=bottom,shape=straight,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "0b",
@@ -244671,7 +245149,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=inner_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "1b",
@@ -244679,7 +245157,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=inner_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "1b",
@@ -244687,7 +245165,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=inner_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "1b",
@@ -244695,7 +245173,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=inner_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "1b",
@@ -244703,7 +245181,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=outer_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "1b",
@@ -244711,7 +245189,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=outer_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "1b",
@@ -244719,7 +245197,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=outer_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "1b",
@@ -244727,7 +245205,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=outer_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "1b",
@@ -244735,7 +245213,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=straight,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "1b",
@@ -244743,7 +245221,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=south,half=top,shape=straight,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "1b",
@@ -244751,7 +245229,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=inner_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "0b",
@@ -244759,7 +245237,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=inner_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "0b",
@@ -244767,7 +245245,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=inner_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "0b",
@@ -244775,7 +245253,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=inner_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "0b",
@@ -244783,7 +245261,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=outer_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "0b",
@@ -244791,7 +245269,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=outer_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "0b",
@@ -244799,7 +245277,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=outer_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "0b",
@@ -244807,7 +245285,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=outer_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "0b",
@@ -244815,7 +245293,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=straight,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "0b",
@@ -244823,7 +245301,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=bottom,shape=straight,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "0b",
@@ -244831,7 +245309,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=inner_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "1b",
@@ -244839,7 +245317,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=inner_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_left",
                 "upside_down_bit": "1b",
@@ -244847,7 +245325,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=inner_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "1b",
@@ -244855,7 +245333,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=inner_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "inner_right",
                 "upside_down_bit": "1b",
@@ -244863,7 +245341,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=outer_left,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "1b",
@@ -244871,7 +245349,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=outer_left,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_left",
                 "upside_down_bit": "1b",
@@ -244879,7 +245357,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=outer_right,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "1b",
@@ -244887,7 +245365,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=outer_right,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "outer_right",
                 "upside_down_bit": "1b",
@@ -244895,7 +245373,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=straight,waterlogged=false]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "1b",
@@ -244903,7 +245381,7 @@
             },
         ),
         "minecraft:stone_stairs[facing=west,half=top,shape=straight,waterlogged=true]": (
-            name: "minecraft:stone_stairs",
+            name: "minecraft:normal_stone_stairs",
             states: {
                 "minecraft:corner": "none",
                 "upside_down_bit": "1b",
@@ -253677,19 +254155,19 @@
         "minecraft:sweet_berry_bush[age=1]": (
             name: "minecraft:sweet_berry_bush",
             states: {
-                "growth": "1",
+                "growth": "2",
             },
         ),
         "minecraft:sweet_berry_bush[age=2]": (
             name: "minecraft:sweet_berry_bush",
             states: {
-                "growth": "2",
+                "growth": "4",
             },
         ),
         "minecraft:sweet_berry_bush[age=3]": (
             name: "minecraft:sweet_berry_bush",
             states: {
-                "growth": "3",
+                "growth": "7",
             },
         ),
         "minecraft:tall_grass[half=lower]": (
@@ -264442,6 +264920,30 @@
                 "vine_direction_bits": "15",
             },
         ),
+        "minecraft:wall_torch[facing=east]": (
+            name: "minecraft:torch",
+            states: {
+                "torch_facing_direction": "west",
+            },
+        ),
+        "minecraft:wall_torch[facing=north]": (
+            name: "minecraft:torch",
+            states: {
+                "torch_facing_direction": "south",
+            },
+        ),
+        "minecraft:wall_torch[facing=south]": (
+            name: "minecraft:torch",
+            states: {
+                "torch_facing_direction": "north",
+            },
+        ),
+        "minecraft:wall_torch[facing=west]": (
+            name: "minecraft:torch",
+            states: {
+                "torch_facing_direction": "east",
+            },
+        ),
         "minecraft:warped_button[face=ceiling,facing=east,powered=false]": (
             name: "minecraft:warped_button",
             states: {
@@ -268373,114 +268875,114 @@
             },
         ),
         "minecraft:water[level=10]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "10",
             },
         ),
         "minecraft:water[level=11]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "11",
             },
         ),
         "minecraft:water[level=12]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "12",
             },
         ),
         "minecraft:water[level=13]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "13",
             },
         ),
         "minecraft:water[level=14]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "14",
             },
         ),
         "minecraft:water[level=15]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "15",
             },
         ),
         "minecraft:water[level=1]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "1",
             },
         ),
         "minecraft:water[level=2]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "2",
             },
         ),
         "minecraft:water[level=3]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "3",
             },
         ),
         "minecraft:water[level=4]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "4",
             },
         ),
         "minecraft:water[level=5]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "5",
             },
         ),
         "minecraft:water[level=6]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "6",
             },
         ),
         "minecraft:water[level=7]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "7",
             },
         ),
         "minecraft:water[level=8]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "8",
             },
         ),
         "minecraft:water[level=9]": (
-            name: "minecraft:flowing_water",
+            name: "minecraft:water",
             states: {
-                "liquid_depth": "0",
+                "liquid_depth": "9",
             },
         ),
         "minecraft:water_cauldron[level=1]": (
             name: "minecraft:cauldron",
             states: {
                 "cauldron_liquid": "water",
-                "fill_level": "1",
+                "fill_level": "2",
             },
         ),
         "minecraft:water_cauldron[level=2]": (
             name: "minecraft:cauldron",
             states: {
                 "cauldron_liquid": "water",
-                "fill_level": "2",
+                "fill_level": "4",
             },
         ),
         "minecraft:water_cauldron[level=3]": (
             name: "minecraft:cauldron",
             states: {
                 "cauldron_liquid": "water",
-                "fill_level": "3",
+                "fill_level": "6",
             },
         ),
         "minecraft:waxed_copper_bars[east=false,north=false,south=false,waterlogged=false,west=false]": (

@@ -12,6 +12,7 @@
 
 pub mod bedrock_side;
 pub mod biomes_enchants;
+pub mod computed;
 pub mod emit;
 pub mod handmaps;
 pub mod java_side;
