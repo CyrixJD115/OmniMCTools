@@ -53,4 +53,4 @@ pub use pipeline::{
     apply_java_conversions, convert_bedrock_chunks, convert_java_chunks,
 };
 pub use proto::{ChunkEra, ProtoFilter, SKIP_PROTO_CHUNKS_DEFAULT, is_proto_chunk};
-pub use rules::{BlockRule, RegistryRules, load_rules};
+pub use rules::{BlockRule, RegistryRules, load_rules, state_key};

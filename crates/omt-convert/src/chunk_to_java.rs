@@ -96,11 +96,14 @@ pub fn bedrock_chunk_to_java(
     }
 
     let mut sections: Vec<Tag> = Vec::new();
+    // The Bedrock→Java state inverse, derived once per chunk from the one
+    // rule table (see `rules::ReverseBlockRules`).
+    let reverse = rules.reverse();
     for (slot_y, slice) in &chunk.slices {
         if is_all_air(slice) {
             continue; // empty sections are omitted entirely
         }
-        let section = section_nbt(*slot_y, slice, chunk, rules, &mut report)?;
+        let section = section_nbt(*slot_y, slice, chunk, rules, &reverse, &mut report)?;
         sections.push(section);
     }
 
@@ -176,17 +179,17 @@ fn section_nbt(
     slice: &omt_world::Slice,
     chunk: &Chunk,
     rules: &RegistryRules,
+    reverse: &crate::rules::ReverseBlockRules,
     report: &mut ConversionReport,
 ) -> Result<Tag, crate::error::ConvertError> {
-    // Palette: 1:1 name passthrough; SNBT properties dropped with a loss
-    // row (the same registry-blocked rule as the forward direction — no
-    // guessed state mappings). Collapse duplicates exactly like the
-    // forward path does.
+    // Palette: Bedrock → Java through the derived inverse table (exact
+    // state inverse, then name inverse, then honest passthrough). Collapse
+    // duplicates exactly like the forward path does.
     let mut palette: Vec<omt_world::BlockState> = Vec::with_capacity(slice.palette.len());
     let mut index_map = Vec::with_capacity(slice.palette.len());
     let mut reported = std::collections::BTreeSet::new();
     for state in &slice.palette {
-        let out = rules.map_block(state, &mut reported, report);
+        let out = reverse.map_block(state, &mut reported, report);
         let idx = match palette.iter().position(|s| s == &out.state) {
             Some(i) => i,
             None => {

@@ -30,12 +30,19 @@ use crate::loss::ConversionReport;
 use crate::proto::ProtoFilter;
 use crate::rules::RegistryRules;
 
-/// Pipeline configuration.
+/// Pipeline configuration. The default rule table is the embedded
+/// generated registry (`tools/registry-gen` output) — build a custom
+/// `ConvertOptions` to override it.
 #[derive(Debug, Clone)]
-#[derive(Default)]
 pub struct ConvertOptions {
     pub filter: ProtoFilter,
     pub rules: RegistryRules,
+}
+
+impl Default for ConvertOptions {
+    fn default() -> Self {
+        Self { filter: ProtoFilter::default(), rules: RegistryRules::embedded().clone() }
+    }
 }
 
 
