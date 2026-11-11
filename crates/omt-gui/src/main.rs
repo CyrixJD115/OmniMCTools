@@ -1,21 +1,37 @@
 //! `omt-gui` — OmniMCTools desktop application (Iced 0.14).
 //!
 //! Shell: Home (world discovery) + one tab per open NBT document. All editor
-//! logic lives in `editor` (state) and `editor_view` (rendering); this module
-//! only routes messages.
+//! logic lives in `editor` (state), `editor_view` (rendering) and `dictionary`
+//! (friendly labels); this module only routes messages.
 
+mod dictionary;
 mod editor;
 mod editor_view;
+mod style;
 
-use iced::widget::{button, column, container, row, scrollable, text};
+use iced::widget::{button, column, container, row, scrollable, space, text};
 use iced::{Color, Element, Length, Subscription, Task, Theme};
 use omt_world::WorldSummary;
 
 use editor::{EditorMsg, EditorTab};
 
+pub(crate) use style::{ACCENT, MUTED};
+/// Added tags.
+pub(crate) const ADDED: Color = style::SUCCESS;
+/// Edited tags.
+pub(crate) const EDITED: Color = style::WARN;
+/// Current search hit.
+pub(crate) const HIT: Color = style::ACCENT;
+
 fn main() -> iced::Result {
     iced::application(OmniMCTools::new, OmniMCTools::update, OmniMCTools::view)
-        .title(|_s: &OmniMCTools| "OmniMCTools".to_string())
+        .title(|s: &OmniMCTools| {
+            let tab = s.active.and_then(|i| s.tabs.get(i)).map(|t| t.title.as_str());
+            match tab {
+                Some(t) => format!("{t} — OmniMCTools"),
+                None => "OmniMCTools".to_string(),
+            }
+        })
         .theme(|_s: &OmniMCTools| omnitheme())
         .subscription(OmniMCTools::subscription)
         .window(iced::window::Settings {
@@ -159,107 +175,180 @@ impl OmniMCTools {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        // Tab bar (Home + documents).
-        let mut tab_bar = row![button("Home").on_press(Message::SelectTab(usize::MAX)).padding(6)].spacing(4);
-        for (i, tab) in self.tabs.iter().enumerate() {
-            let dirty = if tab.is_dirty() { " ●" } else { "" };
-            let label = format!("{}{dirty}  ✕", tab.title);
-            let active = self.active == Some(i);
-            let tab_button = button(
-                row![
-                    text(label.clone()).size(13),
-                ]
-                .spacing(4),
-            )
-            .on_press(Message::SelectTab(i))
-            .padding(6);
-            let tab_button = if active {
-                container(tab_button).style(|_t: &Theme| container::Style {
-                    background: Some(Color::from_rgb(0.14, 0.17, 0.22).into()),
-                    border: iced::border::rounded(4),
-                    ..Default::default()
-                })
-            } else {
-                container(tab_button)
-            };
-            tab_bar = tab_bar.push(
-                row![
-                    tab_button,
-                    button("✕").on_press(Message::CloseTab(i)).padding(4),
-                ]
-                .spacing(2),
-            );
-        }
+        column![
+            self.tab_bar(),
+            container(self.body()).height(Length::Fill),
+            self.status_bar(),
+        ]
+        .width(Length::Fill)
+        .into()
+    }
 
-        let body: Element<'_, Message> = match self.active {
+    // ---- top bar: brand + Home chip + document tab chips --------------------
+    fn tab_bar(&self) -> Element<'_, Message> {
+        let mut bar = row![self.brand()].spacing(8).align_y(iced::Alignment::Center);
+        bar = bar.push(tab_chip("Home", false, false, Message::SelectTab(usize::MAX), None));
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let dirty = tab.is_dirty();
+            bar = bar.push(tab_chip(
+                &tab.title,
+                self.active == Some(i),
+                dirty,
+                Message::SelectTab(i),
+                Some(Message::CloseTab(i)),
+            ));
+        }
+        container(scrollable(container(bar).padding([8, 12])))
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(style::BG)),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    fn brand(&self) -> Element<'_, Message> {
+        row![
+            text("Omni").size(17).color(style::ACCENT),
+            text("MCTools").size(17),
+        ]
+        .padding([0, 6])
+        .into()
+    }
+
+    fn body(&self) -> Element<'_, Message> {
+        match self.active {
             Some(i) if i < self.tabs.len() => editor_view::view(&self.tabs[i], i),
             _ => self.home(),
-        };
+        }
+    }
 
-        column![
-            tab_bar,
-            iced::widget::rule::horizontal(1.0),
-            container(body).height(Length::Fill),
-            iced::widget::rule::horizontal(1.0),
-            row![
-                text(self.status.clone()).size(12).color(MUTED),
-                text("Ctrl+Z undo · Ctrl+Y redo · Ctrl+S save · Ctrl+F find").size(12).color(MUTED),
-            ]
-            .spacing(16),
+    fn status_bar(&self) -> Element<'_, Message> {
+        row![
+            text(self.status.clone()).size(12).color(MUTED),
+            space::horizontal(),
+            text("Ctrl+Z undo · Ctrl+Y redo · Ctrl+S save · Ctrl+F find")
+                .size(12)
+                .color(style::HINT),
         ]
-        .padding(8)
-        .spacing(6)
+        .padding([6, 12])
+        .spacing(16)
         .into()
     }
 
     fn home(&self) -> Element<'_, Message> {
-        let header = row![
-            text("OmniMCTools").size(26),
-            text("Minecraft world tools — Java + Bedrock, latest stable").size(13).color(MUTED),
+        let header = column![
+            text("OmniMCTools").size(30),
+            text("Minecraft world tools — Java + Bedrock, latest stable")
+                .size(13)
+                .color(MUTED),
         ]
-        .spacing(12)
-        .align_y(iced::Alignment::Center);
+        .spacing(4);
 
         let actions = row![
-            button("Open NBT / level.dat file…").on_press(Message::PickFile),
-            button("Rescan worlds").on_press(Message::Refresh),
+            button(text("Open NBT / level.dat file…").color(Color::WHITE))
+                .on_press(Message::PickFile)
+                .style(style::button_style(style::Btn::Primary))
+                .padding([8, 14]),
+            button(text("Rescan worlds"))
+                .on_press(Message::Refresh)
+                .style(style::button_style(style::Btn::Standard))
+                .padding([8, 14]),
         ]
         .spacing(10);
 
-        let worlds = if self.worlds.is_empty() {
-            column![text("No worlds found — set OMT_WORLDS_DIR, or open files directly.").color(MUTED)]
-        } else {
-            self.worlds
-                .iter()
-                .filter_map(|w| {
-                    let level = w.root.join("level.dat");
-                    level.is_file().then_some(
-                        row![
-                            text(w.name.clone()).size(15),
-                            text(w.edition.name()).size(13).color(MUTED),
-                            text(version_label(w)).size(13).color(MUTED),
-                            button("Edit level.dat").on_press({
-                                // Route through FilePicked to reuse open_tab.
-                                Message::FilePicked(Some(level.clone()))
-                            }),
-                        ]
-                        .spacing(16)
-                        .align_y(iced::Alignment::Center),
-                    )
+        let count = self.worlds.len();
+        let worlds: Element<'_, Message> = if self.worlds.is_empty() {
+            column![
+                text("No worlds found.").color(MUTED),
+                text(match &self.scan_dir {
+                    Some(d) => format!("Set OMT_WORLDS_DIR to a folder of worlds (currently {}), or open files directly.", d.display()),
+                    None => "Set OMT_WORLDS_DIR to a folder of Minecraft worlds, or open files directly.".to_string(),
                 })
-                .fold(iced::widget::Column::new().spacing(6), |c, r| c.push(r))
+                .size(12)
+                .color(MUTED),
+            ]
+            .spacing(4)
+            .into()
+        } else {
+            container(scrollable(
+                self.worlds
+                    .iter()
+                    .filter_map(|w| {
+                        let level = w.root.join("level.dat");
+                        level.is_file().then(|| world_card(w, level))
+                    })
+                    .fold(iced::widget::Column::new().spacing(8), |c, card| c.push(card)),
+            ))
+            .height(Length::Fill)
+            .width(Length::Fill)
+            .into()
         };
 
-        column![
-            header,
-            iced::widget::rule::horizontal(1.0),
-            actions,
-            text("Worlds").size(18),
-            container(scrollable(worlds)).height(Length::Fill),
-        ]
-        .spacing(12)
+        container(
+            column![
+                header,
+                actions,
+                iced::widget::rule::horizontal(1.0),
+                text(format!("Worlds ({count})")).size(16),
+                worlds,
+            ]
+            .spacing(12)
+            .padding(20),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
         .into()
     }
+}
+
+/// One world entry as a rounded card: name, edition, version, open action.
+/// Takes ownership of the level.dat path so the message owns it too.
+fn world_card(w: &WorldSummary, level: std::path::PathBuf) -> Element<'_, Message> {
+    let version = version_label(w);
+    row![
+        text(w.name.clone()).size(15),
+        text(w.edition.name()).size(12).color(MUTED),
+        text(version).size(12).color(MUTED),
+        space::horizontal(),
+        button(text("Open level.dat").color(Color::WHITE))
+            .on_press(Message::FilePicked(Some(level)))
+            .style(style::button_style(style::Btn::Confirm))
+            .padding([6, 12]),
+    ]
+    .spacing(16)
+    .align_y(iced::Alignment::Center)
+    .into()
+}
+
+/// Tab-bar chip (Home or a document), with an optional ✕ close button.
+fn tab_chip(
+    title: &str,
+    active: bool,
+    dirty: bool,
+    select: Message,
+    close: Option<Message>,
+) -> Element<'_, Message> {
+    let dot = if dirty { " ●" } else { "" };
+    let label = text(format!("{title}{dot}")).size(13);
+    let chip = button(label)
+        .on_press(select)
+        .style(style::button_style(style::Btn::Ghost))
+        .padding([6, 10]);
+    let chip = if active {
+        container(chip).style(style::card_selected())
+    } else {
+        container(chip)
+    };
+    let mut cell = row![chip].spacing(2).align_y(iced::Alignment::Center);
+    if let Some(close_msg) = close {
+        cell = cell.push(
+            button(text("✕").size(11))
+                .on_press(close_msg)
+                .style(style::button_style(style::Btn::Ghost))
+                .padding([6, 4]),
+        );
+    }
+    cell.into()
 }
 
 async fn pick_nbt_file() -> Option<std::path::PathBuf> {
@@ -304,7 +393,10 @@ fn handle_hotkey(
 
 fn version_label(w: &WorldSummary) -> String {
     if let Some(dv) = w.java_data_version {
-        format!("DataVersion {dv}")
+        match dictionary::data_version_name(i64::from(dv)) {
+            Some(name) => format!("{name} · DataVersion {dv}"),
+            None => format!("DataVersion {dv}"),
+        }
     } else if let Some(v) = w.bedrock_last_opened {
         format!("{}.{}.{}", v[0], v[1], v[2])
     } else {
@@ -312,33 +404,16 @@ fn version_label(w: &WorldSummary) -> String {
     }
 }
 
-// Port-guide §3.1 tokens: window #1d2128, panels #232830, accents
-// #228bf6 / #43a975 / #c04040.
-pub(crate) const BG: Color = Color::from_rgb(0x1d as f32 / 255.0, 0x21 as f32 / 255.0, 0x28 as f32 / 255.0);
-const FG: Color = Color::from_rgb(0xe8 as f32 / 255.0, 0xea as f32 / 255.0, 0xed as f32 / 255.0);
-pub(crate) const ACCENT: Color = Color::from_rgb(0x22 as f32 / 255.0, 0x8b as f32 / 255.0, 0xf6 as f32 / 255.0);
-const SUCCESS: Color = Color::from_rgb(0x43 as f32 / 255.0, 0xa9 as f32 / 255.0, 0x75 as f32 / 255.0);
-const WARN: Color = Color::from_rgb(0xe0 as f32 / 255.0, 0xa0 as f32 / 255.0, 0x30 as f32 / 255.0);
-const DANGER: Color = Color::from_rgb(0xc0 as f32 / 255.0, 0x40 as f32 / 255.0, 0x40 as f32 / 255.0);
-pub(crate) const MUTED: Color = Color::from_rgb(0x9a as f32 / 255.0, 0xa1 as f32 / 255.0, 0xad as f32 / 255.0);
-
-/// Added tags.
-pub(crate) const ADDED: Color = SUCCESS;
-/// Edited tags.
-pub(crate) const EDITED: Color = WARN;
-/// Current search hit.
-pub(crate) const HIT: Color = ACCENT;
-
 fn omnitheme() -> Theme {
     Theme::custom(
         "OmniMCTools",
         iced::theme::Palette {
-            background: BG,
-            text: FG,
-            primary: ACCENT,
-            success: SUCCESS,
-            warning: WARN,
-            danger: DANGER,
+            background: style::BG,
+            text: style::FG,
+            primary: style::ACCENT,
+            success: style::SUCCESS,
+            warning: style::WARN,
+            danger: style::DANGER,
         },
     )
 }
