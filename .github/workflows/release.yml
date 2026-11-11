@@ -1,0 +1,209 @@
+name: Release
+
+# Native builds for all three platforms: Windows zip, Linux AppImage,
+# macOS universal .app bundle. Runs on `v*` tags (which also cuts a GitHub
+# Release) and on demand via workflow_dispatch (artifacts only).
+#
+# Packaging notes:
+# - Linux builds on ubuntu-22.04 for glibc 2.35 compatibility with older
+#   distributions; AppImage assembly uses linuxdeploy with
+#   `--appimage-extract-and-run` (no FUSE on CI runners).
+# - macOS produces a universal (x86_64 + arm64) build via lipo. The bundle
+#   is unsigned — first launch needs right-click → Open (Gatekeeper).
+# - The GUI (omt-gui) renders through wgpu: Linux users need working
+#   Vulkan/GL drivers; the `omt` CLI itself is dependency-free.
+#
+# Fixture-gated tests are #[ignore]d, so `cargo test --workspace` runs
+# cleanly here exactly as in ci.yml.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: windows — build / test / zip
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: release-windows
+
+      - name: Build (release)
+        run: cargo build --release --workspace
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Stage payload
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory staging | Out-Null
+          Copy-Item target/release/omt.exe staging/
+          Copy-Item target/release/omt-gui.exe staging/
+          Copy-Item README.md, LICENSE staging/
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path staging/* -DestinationPath OmniMCTools-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OmniMCTools-windows-x64
+          path: OmniMCTools-windows-x64.zip
+          if-no-files-found: error
+
+  linux-appimage:
+    name: linux — build / test / AppImage
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: release-linux
+
+      - name: Build (release)
+        run: cargo build --release --workspace
+
+      - name: Test
+        run: cargo test --workspace
+
+      # libfuse2 lets the linuxdeploy/appimagetool AppImages execute directly
+      # — required because their runtime exposes the bundled mksquashfs et
+      # al. to PATH only under direct execution.
+      - name: Install AppImage runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse2
+
+      - name: Assemble AppDir
+        run: |
+          mkdir -p AppDir/usr/bin \
+            AppDir/usr/share/applications \
+            AppDir/usr/share/icons/hicolor/128x128/apps
+          install -m 755 target/release/omt AppDir/usr/bin/omt
+          install -m 755 target/release/omt-gui AppDir/usr/bin/omt-gui
+          install -m 644 packaging/linux/omt.desktop AppDir/usr/share/applications/omt.desktop
+          install -m 644 packaging/linux/omt.png AppDir/usr/share/icons/hicolor/128x128/apps/omt.png
+          install -m 644 packaging/linux/omt.png AppDir/omt.png
+          ln -sf omt.png AppDir/.DirIcon
+          install -m 644 README.md AppDir/usr/share/doc/README.md 2>/dev/null || true
+          install -m 644 LICENSE AppDir/usr/share/doc/LICENSE 2>/dev/null || true
+
+      - name: Download linuxdeploy
+        run: |
+          curl -fsSL -o linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy
+
+      - name: Build AppImage
+        run: |
+          ARCH=x86_64 ./linuxdeploy --appdir AppDir --output appimage
+          mv omt-x86_64.AppImage OmniMCTools-linux-x86_64.AppImage
+
+      - name: Smoke-test the AppImage CLI
+        run: ./OmniMCTools-linux-x86_64.AppImage --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OmniMCTools-linux-x86_64
+          path: OmniMCTools-linux-x86_64.AppImage
+          if-no-files-found: error
+
+  macos:
+    name: macos — build / test / universal app bundle
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: release-macos
+
+      - name: Build (release, both arches)
+        run: |
+          cargo build --release --workspace --target x86_64-apple-darwin
+          cargo build --release --workspace --target aarch64-apple-darwin
+
+      - name: Test (native arch)
+        run: cargo test --workspace
+
+      - name: Lipo universal binaries
+        run: |
+          mkdir -p universal
+          for bin in omt omt-gui; do
+            lipo -create \
+              "target/x86_64-apple-darwin/release/$bin" \
+              "target/aarch64-apple-darwin/release/$bin" \
+              -output "universal/$bin"
+          done
+          lipo -info universal/omt
+
+      - name: Assemble app bundle
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p OmniMCTools.app/Contents/MacOS OmniMCTools.app/Contents/Resources
+          sed "s/@VERSION@/${VERSION#v}/" packaging/macos/Info.plist \
+            > OmniMCTools.app/Contents/Info.plist
+          install -m 755 universal/omt-gui OmniMCTools.app/Contents/MacOS/omt-gui
+          install -m 755 universal/omt OmniMCTools.app/Contents/MacOS/omt
+          install -m 644 packaging/linux/omt.png OmniMCTools.app/Contents/Resources/omt.png
+          install -m 644 README.md OmniMCTools.app/Contents/Resources/README.md
+          install -m 644 LICENSE OmniMCTools.app/Contents/Resources/LICENSE
+          # CLI alongside the bundle so a plain terminal works too.
+          mkdir -p payload
+          cp -R OmniMCTools.app payload/
+          install -m 755 universal/omt payload/omt
+
+      - name: Zip
+        run: |
+          mkdir -p payload-zip
+          ditto -c -k --keepParent OmniMCTools.app payload-zip/OmniMCTools.app
+          install -m 755 universal/omt payload-zip/omt
+          (cd payload-zip && zip -q -r ../OmniMCTools-macos-universal.zip OmniMCTools.app omt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OmniMCTools-macos-universal
+          path: OmniMCTools-macos-universal.zip
+          if-no-files-found: error
+
+  release:
+    name: cut GitHub release
+    needs: [windows, linux-appimage, macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.AppImage
+            dist/checksums.txt

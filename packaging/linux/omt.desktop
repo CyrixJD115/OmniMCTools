@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=OmniMCTools
+GenericName=Minecraft world toolkit
+Comment=Minecraft world tool suite (Java + Bedrock, latest stable)
+Exec=omt-gui
+Icon=omt
+Terminal=false
+Categories=Utility;Game;
+Keywords=minecraft;world;bedrock;java;nbt;converter;
