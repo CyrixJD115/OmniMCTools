@@ -68,6 +68,20 @@ impl OmniMCTools {
     fn new() -> Self {
         let scan_dir = std::env::var_os("OMT_WORLDS_DIR").map(std::path::PathBuf::from);
         let mut app = Self { worlds: Vec::new(), scan_dir, tabs: Vec::new(), active: None, status: "ready".into() };
+        // `omt-gui [FILE…]` opens each path as a document tab.
+        for arg in std::env::args_os().skip(1) {
+            let path = std::path::PathBuf::from(arg);
+            match EditorTab::open(&path) {
+                Ok(tab) => {
+                    app.status = format!("opened {}", path.display());
+                    app.tabs.push(tab);
+                }
+                Err(e) => app.status = format!("open failed: {e}"),
+            }
+        }
+        if !app.tabs.is_empty() {
+            app.active = Some(0);
+        }
         app.rescan();
         app
     }
