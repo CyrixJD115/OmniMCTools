@@ -179,6 +179,12 @@ impl JavaWorld {
         resolve_dim_dir(&self.root, self.layout, dim, "region")
     }
 
+    /// Any per-dimension folder (`region`, `entities`, `poi`, `data`),
+    /// resolved across both layout eras like [`Self::dimension_dir`].
+    pub fn dimension_subdir(&self, dim: u8, kind: &str) -> Option<PathBuf> {
+        resolve_dim_dir(&self.root, self.layout, dim, kind)
+    }
+
     /// Entity-region directory for a dimension, resolved like [`Self::dimension_dir`].
     pub fn entity_dimension_dir(&self, dim: u8) -> Option<PathBuf> {
         resolve_dim_dir(&self.root, self.layout, dim, "entities")

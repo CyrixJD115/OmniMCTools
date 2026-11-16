@@ -8,6 +8,7 @@ pub mod detect;
 pub mod packing;
 pub mod path;
 pub mod store;
+pub mod workspace;
 
 pub use detect::{detect, java_spawn_xz, Detected, WorldSummary, WorldSource};
 pub use packing::{
@@ -17,6 +18,7 @@ pub use packing::{
 };
 pub use path::VPath;
 pub use store::{WorldError, WorldNode, WorldResult, WorldStore};
+pub use workspace::{Workspace, WorkspaceError};
 
 use std::collections::BTreeMap;
 

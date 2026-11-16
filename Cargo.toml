@@ -15,6 +15,7 @@ omt-versions = { path = "crates/omt-versions" }
 omt-bedrock = { path = "crates/omt-bedrock" }
 omt-java = { path = "crates/omt-java" }
 omt-convert = { path = "crates/omt-convert" }
+omt-prune = { path = "crates/omt-prune" }
 omt-cli = { path = "crates/omt-cli" }
 omt-gui = { path = "crates/omt-gui" }
 

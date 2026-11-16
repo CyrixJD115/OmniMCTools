@@ -182,6 +182,77 @@ impl RegionFile {
     }
 }
 
+/// Outcome of [`RegionFile::retain`].
+#[derive(Debug, Default)]
+pub struct Retained {
+    /// The rebuilt region image, or `None` when no chunk survived (the
+    /// caller deletes the file — vanilla never keeps empty regions).
+    pub image: Option<Vec<u8>>,
+    /// Absolute coords of chunks that were dropped.
+    pub removed: Vec<(i32, i32)>,
+    /// Dropped chunks whose payload lived in an external `c.x.z.mcc` file
+    /// (scheme high bit set); the caller deletes those files.
+    pub removed_external: Vec<(i32, i32)>,
+}
+
+impl RegionFile {
+    /// Rebuild this region keeping only chunks where `keep(x, z)` is true.
+    ///
+    /// Kept chunks are copied **sector-verbatim** (length, scheme byte,
+    /// compressed payload, timestamp) and packed contiguously, so untouched
+    /// chunks stay byte-identical while dead sectors are reclaimed.
+    pub fn retain(
+        &self,
+        bytes: &[u8],
+        rx: i32,
+        rz: i32,
+        keep: impl Fn(i32, i32) -> bool,
+    ) -> Retained {
+        let mut out = Retained::default();
+        let mut offsets = [0u8; 4096];
+        let mut times = [0u8; 4096];
+        let mut body: Vec<u8> = Vec::new();
+        for (&idx, loc) in &self.locations {
+            let x = rx * 32 + (idx % 32) as i32;
+            let z = rz * 32 + (idx / 32) as i32;
+            let start = loc.offset_sectors as usize * SECTOR_BYTES;
+            let end = (start + loc.count_sectors as usize * SECTOR_BYTES).min(bytes.len());
+            let external = bytes.get(start + 4).is_some_and(|s| s & 0x80 != 0);
+            if !keep(x, z) {
+                out.removed.push((x, z));
+                if external {
+                    out.removed_external.push((x, z));
+                }
+                continue;
+            }
+            if start >= end {
+                continue; // lenient: unreadable entry is dropped, like the reader
+            }
+            let sectors = (end - start).div_ceil(SECTOR_BYTES);
+            let offset = (HEADER_BYTES + body.len()) / SECTOR_BYTES;
+            let i = idx as usize * 4;
+            offsets[i] = (offset >> 16) as u8;
+            offsets[i + 1] = (offset >> 8) as u8;
+            offsets[i + 2] = offset as u8;
+            offsets[i + 3] = sectors as u8;
+            if let Some(t) = self.timestamps.get(&idx) {
+                times[i..i + 4].copy_from_slice(&t.to_be_bytes());
+            }
+            body.extend_from_slice(&bytes[start..end]);
+            body.resize(body.len().div_ceil(SECTOR_BYTES) * SECTOR_BYTES, 0);
+        }
+        if body.is_empty() {
+            return out;
+        }
+        let mut image = Vec::with_capacity(HEADER_BYTES + body.len());
+        image.extend_from_slice(&offsets);
+        image.extend_from_slice(&times);
+        image.extend_from_slice(&body);
+        out.image = Some(image);
+        out
+    }
+}
+
 fn local_index(x: i32, z: i32) -> u16 {
     (((x & 31) + (z & 31) * 32) & 0x3ff) as u16
 }

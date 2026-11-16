@@ -6,6 +6,7 @@ mod convert_cmd;
 mod inspect;
 mod ldb;
 mod nbt_cmd;
+mod prune_cmd;
 mod registry_cmd;
 
 use clap::Parser;
@@ -38,6 +39,8 @@ enum Command {
     Convert(convert_cmd::Args),
     /// Inspect the embedded semantic registry table (`stats`).
     Registry(registry_cmd::Args),
+    /// World Pruner: delete chunks by box/circle/polygon/split/time layers.
+    Prune(prune_cmd::Args),
 }
 
 fn main() {
@@ -50,6 +53,7 @@ fn main() {
         Command::Ldb(args) => ldb::run(&args),
         Command::Convert(args) => convert_cmd::run(&args),
         Command::Registry(args) => registry_cmd::run(args),
+        Command::Prune(args) => prune_cmd::run(&args),
     };
     if let Err(err) = result {
         eprintln!("error: {err}");

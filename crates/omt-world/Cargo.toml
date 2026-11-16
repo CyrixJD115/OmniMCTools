@@ -10,6 +10,7 @@ license.workspace = true
 omt-nbt.workspace = true
 omt-versions.workspace = true
 thiserror.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true
