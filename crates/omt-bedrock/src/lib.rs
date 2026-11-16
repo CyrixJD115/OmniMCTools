@@ -5,7 +5,7 @@ pub mod store;
 pub mod subchunk;
 
 pub use keys::DbKey;
-pub use store::BedrockWorld;
+pub use store::{BedrockWorld, DeleteStats};
 pub use subchunk::{Data3d, Subchunk};
 
 /// Default Bedrock worlds directory on Windows.

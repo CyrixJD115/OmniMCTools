@@ -41,6 +41,8 @@ pub enum WorldError {
     WriteRefused(String),
     #[error("underlying store error: {0}")]
     Store(String),
+    #[error("this is an encrypted Marketplace world; its database cannot be opened (UMT refuses these too)")]
+    Encrypted,
 }
 
 pub type WorldResult<T> = std::result::Result<T, WorldError>;

@@ -20,9 +20,19 @@ pub struct BedrockWorld {
     db: Mutex<Db>,
 }
 
+/// Marketplace worlds ship an encrypted LevelDB: `db/CURRENT` begins with a
+/// binary key-id header instead of the plain `MANIFEST-nnnnnn` line.
+fn refuse_encrypted(root: &Path) -> WorldResult<()> {
+    match std::fs::read(root.join("db").join("CURRENT")) {
+        Ok(bytes) if !bytes.starts_with(b"MANIFEST-") => Err(WorldError::Encrypted),
+        _ => Ok(()),
+    }
+}
+
 impl BedrockWorld {
     /// Open read-only — browsing, inspecting, converting. Never mutates.
     pub fn open_read_only(root: &Path) -> WorldResult<Self> {
+        refuse_encrypted(root)?;
         let level_bytes = std::fs::read(root.join("level.dat"))
             .map_err(WorldError::Io)
             .map_err(|e| WorldError::Corrupt { context: "level.dat".into(), source: Box::new(e) })?;
@@ -46,6 +56,7 @@ impl BedrockWorld {
     /// Open writable — converter write paths (M3). Mutates the world: pair
     /// with the copy-on-open workflow (copy the world folder first).
     pub fn open_writable(root: &Path) -> WorldResult<Self> {
+        refuse_encrypted(root)?;
         let level_bytes = std::fs::read(root.join("level.dat"))
             .map_err(WorldError::Io)
             .map_err(|e| WorldError::Corrupt { context: "level.dat".into(), source: Box::new(e) })?;
@@ -262,6 +273,85 @@ impl BedrockWorld {
     }
 }
 
+/// What [`BedrockWorld::delete_columns`] removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeleteStats {
+    /// Distinct chunk columns that had at least one record removed.
+    pub columns: usize,
+    /// Chunk records + subchunks + digp keys removed.
+    pub records: usize,
+    /// `actorprefix` entity records removed (referenced by deleted digps).
+    pub actors: usize,
+}
+
+impl BedrockWorld {
+    /// Delete whole chunk columns of one dimension in a single pass over the
+    /// database: every chunk record / subchunk whose *decoded* key matches
+    /// (never a raw prefix match — an overworld base is a byte prefix of the
+    /// nether/end keys at the same x,z), each column's `digp`, and the
+    /// `actorprefix` records that `digp` lists (pruning removes entities
+    /// with their chunk, as UMT does).
+    pub fn delete_columns(
+        &self,
+        dim: u8,
+        columns: &std::collections::HashSet<(i32, i32)>,
+    ) -> WorldResult<DeleteStats> {
+        if columns.is_empty() {
+            return Ok(DeleteStats::default());
+        }
+        let snapshot = self
+            .db()
+            .snapshot()
+            .map_err(|e| WorldError::Store(format!("leveldb snapshot: {e}")))?;
+        let mut victims: Vec<Vec<u8>> = Vec::new();
+        let mut touched = std::collections::HashSet::new();
+        let mut stats = DeleteStats::default();
+        for (k, v) in snapshot.iter() {
+            let hit = match keys::decode_key(&k) {
+                DbKey::ChunkRecord { x, z, dim: d, .. } | DbKey::Subchunk { x, z, dim: d, .. }
+                    if d == dim && columns.contains(&(x, z)) =>
+                {
+                    Some((x, z))
+                }
+                DbKey::Digp { x, z, dim: d } if d == dim && columns.contains(&(x, z)) => {
+                    for id in v.as_chunks::<8>().0 {
+                        victims.push(keys::actor_key(*id));
+                        stats.actors += 1;
+                    }
+                    Some((x, z))
+                }
+                _ => None,
+            };
+            if let Some(xz) = hit {
+                touched.insert(xz);
+                victims.push(k.to_vec());
+                stats.records += 1;
+            }
+        }
+        drop(snapshot);
+        stats.columns = touched.len();
+        let db = self.db();
+        for chunk in victims.chunks(20_000) {
+            let mut batch = WriteBatch::new();
+            for k in chunk {
+                batch.delete(k.clone());
+            }
+            db.write(batch, WriteOptions::default())
+                .map_err(|e| WorldError::Store(format!("leveldb write: {e}")))?;
+        }
+        Ok(stats)
+    }
+
+    /// Full database compaction (UMT's pruner "Optimize" tool): rewrites the
+    /// tables so deleted keys stop occupying disk space.
+    pub fn compact(&self) -> WorldResult<()> {
+        let db = self.db();
+        db.flush().map_err(|e| WorldError::Store(format!("leveldb flush: {e}")))?;
+        db.compact_range(None, None)
+            .map_err(|e| WorldError::Store(format!("leveldb compact: {e}")))
+    }
+}
+
 impl WorldStore for BedrockWorld {
     fn read_chunk(&self, dim: u8, x: i32, z: i32) -> WorldResult<Option<Chunk>> {
         self.read_chunk_full(dim, x, z)
@@ -274,28 +364,9 @@ impl WorldStore for BedrockWorld {
     }
 
     fn delete_chunk(&self, dim: u8, x: i32, z: i32) -> WorldResult<()> {
-        // Enumerate every key with this column's base and delete it,
-        // including digp; actor NBT itself is left for actor GC (M5).
-        let base = keys::chunk_base(x, z, dim);
-        let snapshot = self
-            .db()
-            .snapshot()
-            .map_err(|e| WorldError::Store(format!("leveldb snapshot: {e}")))?;
-        let victims: Vec<Vec<u8>> = snapshot
-            .scan_prefix(&base)
-            .map(|(k, _)| k.to_vec())
-            .collect();
-        let digp_victim = keys::digp_key(x, z, dim);
-        drop(snapshot);
-        let db = self.db();
-        let mut batch = WriteBatch::new();
-        for k in victims {
-            batch.delete(k);
-        }
-        batch.delete(digp_victim);
-        db.write(batch, WriteOptions::default())
-            .map_err(|e| WorldError::Store(format!("leveldb write: {e}")))?;
-        Ok(())
+        let mut one = std::collections::HashSet::new();
+        one.insert((x, z));
+        self.delete_columns(dim, &one).map(|_| ())
     }
 
     fn iter_chunks(&self, dim: u8) -> WorldResult<Box<dyn Iterator<Item = (i32, i32)> + '_>> {

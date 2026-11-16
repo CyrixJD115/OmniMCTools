@@ -24,18 +24,15 @@ fuzz_target!(|data: &[u8]| {
     };
     let x = word(0);
     let z = word(4);
-    // Only real Bedrock dimensions (0 overworld / 1 nether / 2 end) are
-    // round-trippable: `decode_chunk_base` treats a byte <= 2 at the base
-    // boundary as the dimension, so any other dim byte is intentionally
-    // indistinguishable from overworld key bytes.
+    // Only real Bedrock dimensions (0 overworld / 1 nether / 2 end) exist;
+    // the dimension is an i32 LE after x/z (absent for the overworld).
     let dim = data.first().copied().unwrap_or(0);
     let tag = data.get(8).copied().unwrap_or(0);
     let y = data.get(9).copied().unwrap_or(0) as i8;
 
     if dim <= 2 {
-        if !(dim == 0 && tag <= 2) {
-            // Overworld tags <= 2 would be read back as a dimension byte —
-            // no real record uses tags that low (see keys::tag constants).
+        if matches!(tag, 0x2b..=0x41 | 0x76 | 0x77) {
+            // Only documented record tags classify as chunk records.
             assert_eq!(
                 keys::decode_key(&keys::chunk_record(x, z, dim, tag)),
                 DbKey::ChunkRecord { x, z, dim, tag },
