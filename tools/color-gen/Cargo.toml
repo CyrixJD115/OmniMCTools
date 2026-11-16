@@ -1,0 +1,16 @@
+[package]
+name = "color-gen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "OMT map-color generator: per-block top-face colors and per-biome tints from the pinned client.jar (output embedded by omt-render)."
+
+[dependencies]
+serde_json = { workspace = true }
+zip = { workspace = true }
+png = "0.18"
+
+[lints]
+workspace = true

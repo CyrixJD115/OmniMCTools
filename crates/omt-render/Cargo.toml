@@ -1,0 +1,17 @@
+[package]
+name = "omt-render"
+description = "Top-down map rendering for OmniMCTools: block colors from client.jar, biome tint, water depth, slicer, height shading"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-world.workspace = true
+omt-convert.workspace = true
+serde_json.workspace = true
+png = "0.18"
+rayon = "1"
+
+[lints]
+workspace = true

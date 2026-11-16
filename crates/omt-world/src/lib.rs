@@ -132,6 +132,24 @@ impl BedrockBiomeSlot {
 /// One column's biome slots, bottom to top.
 pub type BedrockBiomes = Vec<BedrockBiomeSlot>;
 
+/// Java per-section biomes: a name palette and 64 cell indices (4×4×4
+/// cells, YZX: `(y/4)*16 + (z/4)*4 + x/4`). A single-entry palette has all
+/// cells 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BiomeCells {
+    pub palette: Vec<String>,
+    pub cells: Vec<u16>,
+}
+
+impl BiomeCells {
+    /// Biome name at in-section block coordinates (0..16 each).
+    pub fn at(&self, x: usize, y: usize, z: usize) -> Option<&str> {
+        let idx = (y / 4) * 16 + (z / 4) * 4 + x / 4;
+        let p = *self.cells.get(idx).unwrap_or(&0);
+        self.palette.get(p as usize).map(String::as_str)
+    }
+}
+
 /// A decoded chunk column. `slices` is keyed by Y index of the 16-block layer:
 /// −4..=19 for a full-height world (−64..319).
 #[derive(Debug, Clone, Default)]
@@ -152,6 +170,8 @@ pub struct Chunk {
     pub biomes_3d: bool,
     /// Bedrock data3D biome record (see [`BedrockBiomes`]).
     pub bedrock_biomes: Option<BedrockBiomes>,
+    /// Java section biomes keyed by section Y (see [`BiomeCells`]).
+    pub java_biomes: BTreeMap<i8, BiomeCells>,
     pub block_entities: Vec<omt_nbt::Tag>,
     pub entities: Vec<omt_nbt::Tag>,
     pub block_ticks: Vec<omt_nbt::Tag>,

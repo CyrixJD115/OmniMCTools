@@ -16,6 +16,7 @@ omt-bedrock = { path = "crates/omt-bedrock" }
 omt-java = { path = "crates/omt-java" }
 omt-convert = { path = "crates/omt-convert" }
 omt-prune = { path = "crates/omt-prune" }
+omt-render = { path = "crates/omt-render" }
 omt-cli = { path = "crates/omt-cli" }
 omt-gui = { path = "crates/omt-gui" }
 

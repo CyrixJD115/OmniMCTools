@@ -312,8 +312,22 @@ pub fn nbt_to_chunk(dim: u8, x: i32, z: i32, nbt: &Nbt) -> WorldResult<Chunk> {
                 };
                 chunk.slices.insert(y as i8, omt_world::Slice { palette, indices });
             }
-            if section.get("biomes").is_some() {
+            if let Some(b) = section.get("biomes") {
                 chunk.biomes_3d = true;
+                let palette: Vec<String> = b
+                    .get("palette")
+                    .and_then(|t| t.as_list())
+                    .map(|l| l.iter().filter_map(|e| e.as_str().map(str::to_owned)).collect())
+                    .unwrap_or_default();
+                let cells = match b.get("data") {
+                    Some(Tag::LongArray(packed)) if palette.len() > 1 => {
+                        omt_world::packing::unpack_java_biome_cells(packed, palette.len())
+                    }
+                    _ => vec![0u16; 64],
+                };
+                if !palette.is_empty() {
+                    chunk.java_biomes.insert(y as i8, omt_world::BiomeCells { palette, cells });
+                }
             }
         }
     }

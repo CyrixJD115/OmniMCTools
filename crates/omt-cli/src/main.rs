@@ -8,6 +8,7 @@ mod ldb;
 mod nbt_cmd;
 mod prune_cmd;
 mod registry_cmd;
+mod render_cmd;
 
 use clap::Parser;
 
@@ -41,6 +42,8 @@ enum Command {
     Registry(registry_cmd::Args),
     /// World Pruner: delete chunks by box/circle/polygon/split/time layers.
     Prune(prune_cmd::Args),
+    /// Render a top-down map PNG (Chunk Locator view; slicer, biome tint).
+    Render(render_cmd::Args),
 }
 
 fn main() {
@@ -54,6 +57,7 @@ fn main() {
         Command::Convert(args) => convert_cmd::run(&args),
         Command::Registry(args) => registry_cmd::run(args),
         Command::Prune(args) => prune_cmd::run(&args),
+        Command::Render(args) => render_cmd::run(&args),
     };
     if let Err(err) = result {
         eprintln!("error: {err}");
