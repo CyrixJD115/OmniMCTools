@@ -53,6 +53,13 @@ impl Camera {
         self.zoom = new;
     }
 
+    /// Block-space viewport rectangle (min/max world coords on screen).
+    pub fn visible_blocks(self, view: Size) -> (f64, f64, f64, f64) {
+        let (x0, z0) = self.to_block(view, Point::ORIGIN);
+        let (x1, z1) = self.to_block(view, Point::new(view.width, view.height));
+        (x0.min(x1), z0.min(z1), x0.max(x1), z0.max(z1))
+    }
+
     /// Fit a chunk-space box into a viewport of roughly `view` pixels.
     pub fn fit(bounds: (i32, i32, i32, i32), view: Size) -> Self {
         let (x0, z0, x1, z1) = bounds;
@@ -187,8 +194,9 @@ impl<M> canvas::Program<M> for MapView<'_, M> {
         tiles.fill_rectangle(Point::ORIGIN, size, Color::from_rgb8(0x12, 0x14, 0x18));
         let cam = self.camera;
         let tile_screen = TILE_PX as f32 * cam.zoom;
-        for (rx, rz, handle) in &self.map.tiles {
-            let p = cam.to_screen(size, (*rx * TILE_PX as i32) as f64, (*rz * TILE_PX as i32) as f64);
+        for (&(rx, rz), tile) in &self.map.tiles {
+            let handle = &tile.handle;
+            let p = cam.to_screen(size, (rx * TILE_PX as i32) as f64, (rz * TILE_PX as i32) as f64);
             if p.x > size.width || p.y > size.height || p.x + tile_screen < 0.0 || p.y + tile_screen < 0.0 {
                 continue;
             }

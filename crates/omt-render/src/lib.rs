@@ -10,6 +10,6 @@ pub mod map;
 pub mod palette;
 pub mod render;
 
-pub use map::{MapImage, render_chunks, render_world};
+pub use map::{MapImage, render_chunks, render_world, shade_all};
 pub use palette::{BiomeColors, BlockColor, Palette, Tint};
 pub use render::{ChunkRender, RenderOptions, biome_at, render_chunk, shade};

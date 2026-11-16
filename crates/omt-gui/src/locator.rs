@@ -6,7 +6,7 @@
 use iced::widget::{button, canvas, column, container, row, slider, space, text, text_input};
 use iced::{Element, Length, Size, Task};
 
-use crate::mapdata::{MapBuild, MapData};
+use crate::mapdata::{self, MapBuild, MapData, MapScan, TileSource, MAX_INFLIGHT};
 use crate::mapview::{Camera, MapEvent, MapView, Overlay};
 use crate::session::{Store, blocking};
 use crate::style::{self, Btn};
@@ -31,7 +31,8 @@ pub enum LocMsg {
     SlicerOff,
     Goto(String),
     GotoSubmit,
-    Ready(u8, Result<std::sync::Arc<std::sync::Mutex<Option<MapBuild>>>, String>),
+    ScanReady(u8, Result<MapScan, String>),
+    Tile(u8, (i32, i32), Result<MapBuild, String>),
     Open(OpenWhat),
     Fit,
 }
@@ -43,6 +44,8 @@ pub struct Locator {
     pub dim: u8,
     pub camera: Camera,
     pub map: Option<MapData>,
+    source: Option<TileSource>,
+    inflight: HashSet<(i32, i32)>,
     loading: bool,
     slicer: Option<i32>,
     slicer_draft: i32,
@@ -55,12 +58,16 @@ pub struct Locator {
     fitted: bool,
 }
 
+use std::collections::HashSet;
+
 impl Locator {
     pub fn new(nether_default: i32) -> Self {
         Self {
             dim: 0,
             camera: Camera::default(),
             map: None,
+            source: None,
+            inflight: HashSet::new(),
             loading: false,
             slicer: None,
             slicer_draft: 319,
@@ -82,6 +89,41 @@ impl Locator {
         let Some(store) = store else { return Task::none() };
         self.loading = true;
         let dim = self.dim;
+        self.status = "Scanning chunks…".into();
+        let s2 = store.clone();
+        Task::perform(blocking(move || crate::mapdata::scan(&s2, dim)), move |r| {
+            LocMsg::ScanReady(dim, r)
+        })
+    }
+
+    /// Build the tiles the camera can see (on demand), offload far ones, and
+    /// keep at most `MAX_INFLIGHT` background builds running.
+    fn refill(&mut self) -> Task<LocMsg> {
+        let Some(map) = &mut self.map else { return Task::none() };
+        let Some(src) = self.source.clone() else { return Task::none() };
+        let view = Size::new(900.0, 640.0);
+        let (bx0, bz0, bx1, bz1) = self.camera.visible_blocks(view);
+        let mut want = mapdata::tile_range(bx0, bz0, bx1, bz1);
+        // One-tile margin so panning never shows holes at the edges.
+        want.0 -= 1;
+        want.1 -= 1;
+        want.2 += 1;
+        want.3 += 1;
+        let center = (
+            ((bx0 + bx1) / 2.0).floor() as i32,
+            ((bz0 + bz1) / 2.0).floor() as i32,
+        );
+        let center_tile = (center.0.div_euclid(mapdata::TILE_CHUNKS), center.1.div_euclid(mapdata::TILE_CHUNKS));
+        let dropped = map.prune_cache(want, center_tile);
+        if dropped > 0 {
+            self.status = format!("{} tiles cached (offloaded {dropped} off-screen)", map.tiles.len());
+        }
+        let slots = MAX_INFLIGHT.saturating_sub(self.inflight.len());
+        if slots == 0 {
+            return Task::none();
+        }
+        let next = mapdata::refill_plan(&map.tiles, &self.inflight, want, center_tile, slots);
+        let dim = self.dim;
         let mut opts = omt_render::RenderOptions::for_dimension(dim);
         if dim == 1 {
             opts.max_y = Some(self.nether_default);
@@ -89,11 +131,24 @@ impl Locator {
         if self.slicer.is_some() {
             opts.max_y = self.slicer;
         }
-        self.slicer_draft = opts.max_y.unwrap_or(319);
-        self.status = "Rendering…".into();
-        Task::perform(blocking(move || crate::mapdata::build(store, dim, opts)), move |r| {
-            LocMsg::Ready(dim, r.map(|b| std::sync::Arc::new(std::sync::Mutex::new(Some(b)))))
-        })
+        let mut tasks = Vec::new();
+        for tile in next {
+            self.inflight.insert(tile);
+            let src = src.clone();
+            tasks.push(Task::perform(
+                blocking(move || mapdata::build_tile(&src, dim, opts, tile.0, tile.1)),
+                move |r| LocMsg::Tile(dim, tile, r),
+            ));
+        }
+        if !tasks.is_empty() {
+            self.status = format!(
+                "{} tiles built · {} rendering… · {} chunks total",
+                map.tiles.len(),
+                self.inflight.len(),
+                map.chunk_total()
+            );
+        }
+        Task::batch(tasks)
     }
 
     /// Returns a task and, for `Open`, the request for the session.
@@ -103,8 +158,12 @@ impl Locator {
                 MapEvent::Pan { dx, dz } => {
                     self.camera.cx += dx;
                     self.camera.cz += dz;
+                    return (self.refill(), None);
                 }
-                MapEvent::Zoom { factor, at } => self.camera.zoom_at(factor, at),
+                MapEvent::Zoom { factor, at } => {
+                    self.camera.zoom_at(factor, at);
+                    return (self.refill(), None);
+                }
                 MapEvent::Hover { at } => self.hover = Some(at),
                 MapEvent::Press { at, right: false, .. } => {
                     let (bx, bz) = (at.0.floor() as i32, at.1.floor() as i32);
@@ -155,31 +214,47 @@ impl Locator {
                 self.selected = Some(((x.floor() as i32).div_euclid(16), (z.floor() as i32).div_euclid(16)));
                 self.selected_block = Some((x.floor() as i32, z.floor() as i32));
             }
-            LocMsg::Ready(dim, res) => {
-                if dim == self.dim {
-                    self.loading = false;
-                    match res {
-                        Ok(slot) => {
-                            if let Some(b) = slot.lock().ok().and_then(|mut g| g.take()) {
-                                let data = MapData::from_build(b);
-                                self.status = match data.errors {
-                                    0 => format!("{} chunks · {:.1}s", data.chunks.len(), data.millis as f32 / 1000.0),
-                                    n => format!(
-                                        "{} chunks · {n} UNREADABLE (shown as holes) · {:.1}s",
-                                        data.chunks.len(),
-                                        data.millis as f32 / 1000.0
-                                    ),
-                                };
-                                if !self.fitted && let Some(bounds) = data.chunk_bounds() {
-                                    self.camera = Camera::fit(bounds, Size::new(900.0, 640.0));
-                                    self.fitted = true;
-                                }
-                                self.map = Some(data);
-                            }
+            LocMsg::ScanReady(dim, res) => {
+                if dim != self.dim {
+                    return (Task::none(), None);
+                }
+                self.loading = false;
+                match res {
+                    Ok(scan) => {
+                        self.status = format!(
+                            "{} chunks · scanned in {:.1}s — rendering visible tiles…",
+                            scan.chunks.len(),
+                            scan.millis as f32 / 1000.0
+                        );
+                        self.source = store.as_ref().map(crate::mapdata::tile_source).transpose().ok().flatten();
+                        self.map = Some(MapData::with_scan(scan));
+                        if !self.fitted && let Some(bounds) = self.map.as_ref().and_then(MapData::chunk_bounds) {
+                            self.camera = Camera::fit(bounds, Size::new(900.0, 640.0));
+                            self.fitted = true;
                         }
-                        Err(e) => self.status = format!("render failed: {e}"),
+                        return (self.refill(), None);
+                    }
+                    Err(e) => self.status = format!("render failed: {e}"),
+                }
+            }
+            LocMsg::Tile(dim, tile, res) => {
+                self.inflight.remove(&tile);
+                if dim != self.dim || res.is_err() {
+                    if let Err(e) = &res {
+                        self.status = format!("tile render failed: {e}");
+                    }
+                    return (self.refill(), None);
+                }
+                if let Some(map) = &mut self.map
+                    && let Ok(build) = res
+                {
+                    let errs = build.errors;
+                    map.insert(build);
+                    if errs > 0 {
+                        self.status = format!("{} tile unreadable chunks (shown as holes)", errs);
                     }
                 }
+                return (self.refill(), None);
             }
             LocMsg::Open(what) => {
                 if let Some((x, z)) = self.selected {
@@ -236,7 +311,7 @@ impl Locator {
         let info: Element<'_, LocMsg> = match (self.selected, self.selected_block) {
             (Some((cx, cz)), Some((bx, bz))) => {
                 let ident = self.map.as_ref().and_then(|m| m.identify(bx, bz)).map(|(n, y)| format!("Surface: {n} at Y {y}")).unwrap_or_else(|| "No data here".into());
-                let present = self.map.as_ref().is_some_and(|m| m.chunks.contains(&(cx, cz)));
+                let present = self.map.as_ref().is_some_and(|m| m.chunk_present(cx, cz));
                 let mut actions = row![].spacing(6);
                 if present {
                     if bedrock {

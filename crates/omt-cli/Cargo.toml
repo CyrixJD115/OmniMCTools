@@ -11,6 +11,7 @@ name = "omt"
 path = "src/main.rs"
 
 [dependencies]
+rayon = "1"
 omt-nbt.workspace = true
 omt-convert.workspace = true
 omt-world.workspace = true

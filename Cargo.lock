@@ -2904,8 +2904,10 @@ version = "0.1.0"
 dependencies = [
  "bedrock-leveldb",
  "omt-nbt",
+ "omt-render",
  "omt-versions",
  "omt-world",
+ "rayon",
  "thiserror 2.0.21",
 ]
 
@@ -2922,6 +2924,7 @@ dependencies = [
  "omt-render",
  "omt-versions",
  "omt-world",
+ "rayon",
  "ron",
  "serde_json",
 ]
@@ -2946,6 +2949,7 @@ dependencies = [
 name = "omt-gui"
 version = "0.1.0"
 dependencies = [
+ "bedrock-leveldb",
  "dirs",
  "iced",
  "omt-bedrock",
@@ -2957,6 +2961,7 @@ dependencies = [
  "omt-script",
  "omt-versions",
  "omt-world",
+ "rayon",
  "rfd",
  "serde",
  "serde_json",

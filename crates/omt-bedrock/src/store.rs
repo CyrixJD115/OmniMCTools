@@ -53,6 +53,32 @@ impl BedrockWorld {
         self.db.lock().expect("leveldb mutex poisoned")
     }
 
+    /// One materialized, immutable view of the whole database. Bulk readers
+    /// (map rendering, exports) should take this **once** and serve every
+    /// column from it — a per-column `snapshot()` re-collects the entire DB
+    /// each call and dominates the runtime otherwise. The returned handle is
+    /// `Clone` (Arc-shared) and safe to share across threads.
+    pub fn snapshot(&self) -> WorldResult<bedrock_leveldb::Snapshot> {
+        self.db()
+            .snapshot()
+            .map_err(|e| WorldError::Store(format!("leveldb snapshot: {e}")))
+    }
+
+    /// Decode one column from snapshot-provided records (no database access).
+    /// `actors` may be empty — the map renderer needs only block data.
+    pub fn decode_snapshot_column(
+        dim: u8,
+        x: i32,
+        z: i32,
+        records: &[(Vec<u8>, Vec<u8>)],
+    ) -> WorldResult<Option<Chunk>> {
+        let cols = ColumnRecords {
+            records: records.iter().cloned().collect(),
+            actors: Vec::new(),
+        };
+        Self::decode_column(dim, x, z, &cols)
+    }
+
     /// Open writable — converter write paths (M3). Mutates the world: pair
     /// with the copy-on-open workflow (copy the world folder first).
     pub fn open_writable(root: &Path) -> WorldResult<Self> {

@@ -11,6 +11,8 @@ name = "omt-gui"
 path = "src/main.rs"
 
 [dependencies]
+bedrock-leveldb.workspace = true
+rayon = "1"
 omt-nbt.workspace = true
 omt-world.workspace = true
 omt-versions.workspace = true

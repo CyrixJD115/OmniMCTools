@@ -15,3 +15,7 @@ thiserror.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rayon = "1"
+omt-render.workspace = true

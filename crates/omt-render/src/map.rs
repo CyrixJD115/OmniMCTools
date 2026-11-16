@@ -31,12 +31,17 @@ pub fn render_chunks(
     let errors = results.iter().filter(|r| r.1).count();
     let mut map: HashMap<(i32, i32), ChunkRender> =
         results.into_iter().filter_map(|r| r.0).map(|r| ((r.x, r.z), r)).collect();
-    // Shade with the northern neighbor's heights.
+    shade_all(&mut map);
+    (map, errors)
+}
+
+/// Cross-chunk height shading (northern neighbor). Shared by the store path
+/// and the Bedrock snapshot fast path.
+pub fn shade_all(map: &mut HashMap<(i32, i32), ChunkRender>) {
     let norths: HashMap<(i32, i32), [i32; 256]> = map.iter().map(|(k, r)| (*k, r.heights)).collect();
     for ((x, z), r) in map.iter_mut() {
         shade(r, norths.get(&(*x, *z - 1)));
     }
-    (map, errors)
 }
 
 /// A stitched map image; pixel (0,0) is block (`min_cx*16`, `min_cz*16`).
