@@ -262,7 +262,11 @@ fn converts_fixture_bedrock_world_to_java() {
     // Entity region: the injected actor is present with the Java 1.17 root
     // shape and the identifier→id rename; its UUID-less state is a loss row.
     let (erx, erz) = (px.div_euclid(32), pz.div_euclid(32));
-    let epath = java_dir.join("entities").join(format!("r.{erx}.{erz}.mca"));
+    let epath = omt_java::JavaWorld::open(&java_dir)
+        .unwrap()
+        .entity_dimension_dir(0)
+        .unwrap()
+        .join(format!("r.{erx}.{erz}.mca"));
     assert!(epath.is_file(), "entity region written at {}", epath.display());
     let eregion = RegionFile::open(&epath).unwrap();
     let ebytes = std::fs::read(&epath).unwrap();

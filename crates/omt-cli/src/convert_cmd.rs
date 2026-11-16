@@ -80,6 +80,38 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Convert a whole world into a NEW world folder of the other edition
+    /// (level.dat settings + every enabled dimension). The source is only read.
+    World {
+        /// Source world folder or archive (.zip/.mcworld).
+        src: std::path::PathBuf,
+        /// New output folder (must not exist; `.mcworld`/`.zip` → archive).
+        dst: std::path::PathBuf,
+        /// Output edition.
+        #[arg(long, value_enum)]
+        to: EditionArg,
+        /// Dimensions to convert (repeatable; default all three).
+        #[arg(long, value_enum)]
+        dim: Vec<DimArg>,
+        /// Keep partially-generated chunks (default: skip, as UMT).
+        #[arg(long)]
+        keep_proto: bool,
+        /// Override the output game mode (0 survival, 1 creative, 2 adventure, 3 spectator).
+        #[arg(long)]
+        game_mode: Option<i32>,
+        /// Output world name.
+        #[arg(long)]
+        name: Option<String>,
+        /// Print the N most frequent loss rows (grouped).
+        #[arg(long, default_value_t = 0)]
+        losses: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum EditionArg {
+    Java,
+    Bedrock,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -212,7 +244,69 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         Command::Chunks { to_java, java, bedrock, dim, rules, keep_proto, dry_run, .. } => {
             run_chunks(*to_java, java.clone(), bedrock.clone(), *dim, rules.clone(), *keep_proto, *dry_run)
         }
+        Command::World { src, dst, to, dim, keep_proto, game_mode, name, losses } => run_world(&WorldJob {
+            src,
+            dst,
+            to: *to,
+            dims: dim,
+            keep_proto: *keep_proto,
+            game_mode: *game_mode,
+            name: name.clone(),
+            top_losses: *losses,
+        }),
     }
+}
+
+struct WorldJob<'a> {
+    src: &'a std::path::Path,
+    dst: &'a std::path::Path,
+    to: EditionArg,
+    dims: &'a [DimArg],
+    keep_proto: bool,
+    game_mode: Option<i32>,
+    name: Option<String>,
+    top_losses: usize,
+}
+
+fn run_world(job: &WorldJob<'_>) -> Result<(), Box<dyn std::error::Error>> {
+    use omt_world::workspace::{self, Workspace};
+    let WorldJob { src, dst, to, dims, keep_proto, game_mode, ref name, top_losses } = *job;
+    let name = name.clone();
+    let mut opts = omt_convert::world::WorldOptions { skip_partial: !keep_proto, game_mode, level_name: name, ..Default::default() };
+    if !dims.is_empty() {
+        opts.dims = [false; 3];
+        for d in dims {
+            opts.dims[u8::from(*d) as usize] = true;
+        }
+    }
+    let edition = match to {
+        EditionArg::Java => omt_world::Edition::Java,
+        EditionArg::Bedrock => omt_world::Edition::Bedrock,
+    };
+    // Archives in, archives out: work through workspaces.
+    let src_ws = workspace::is_archive(src).then(|| Workspace::open(src, &workspace::default_base())).transpose()?;
+    let src_root = src_ws.as_ref().map_or_else(|| src.to_path_buf(), |w| w.root().to_path_buf());
+    let out_dir = if workspace::is_archive(dst) { workspace::default_base().join(format!("convert-out-{}", std::process::id())) } else { dst.to_path_buf() };
+    let started = std::time::Instant::now();
+    let result = omt_convert::world::convert_world(&src_root, &out_dir, edition, &opts, &|m| eprintln!("{m}"));
+    if let Some(ws) = src_ws {
+        ws.discard()?;
+    }
+    let report = result?;
+    if out_dir != dst {
+        workspace::write_archive(&out_dir, dst)?;
+        std::fs::remove_dir_all(&out_dir)?;
+    }
+    for d in &report.dims {
+        let name = omt_world::Dimension::from_id(d.dim).map(|x| x.name()).unwrap_or("?");
+        println!("{name}: {} converted, {} skipped (partial), {} failed", d.converted, d.skipped_proto, d.failed);
+    }
+    println!("losses: {}", loss_tally(&report.losses));
+    for (kind, path, detail, n) in report.losses.grouped().into_iter().take(top_losses) {
+        println!("  {n:>6} × [{}] {path}: {detail}", kind.label());
+    }
+    println!("wrote {} in {:.1}s", dst.display(), started.elapsed().as_secs_f32());
+    Ok(())
 }
 
 fn run_item_stack(

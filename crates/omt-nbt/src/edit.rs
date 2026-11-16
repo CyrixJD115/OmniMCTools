@@ -161,7 +161,34 @@ impl std::str::FromStr for TagPath {
                     i = close + 1;
                 }
                 b'"' => {
-                    return Err(err("quoted keys must appear inside [...]".into()));
+                    // `."quoted key"` — the form `Display` writes for keys
+                    // with `:`/spaces/quotes (e.g. 26.3 `minecraft:` rules).
+                    let mut key = String::new();
+                    let mut j = i + 1;
+                    let mut closed = false;
+                    while j < bytes.len() {
+                        match bytes[j] {
+                            b'\\' if j + 1 < bytes.len() => {
+                                key.push(bytes[j + 1] as char);
+                                j += 2;
+                            }
+                            b'"' => {
+                                closed = true;
+                                j += 1;
+                                break;
+                            }
+                            _ => {
+                                let ch = s[j..].chars().next().expect("in bounds");
+                                key.push(ch);
+                                j += ch.len_utf8();
+                            }
+                        }
+                    }
+                    if !closed {
+                        return Err(err("unterminated quoted key".into()));
+                    }
+                    out.push(PathSeg::Key(key));
+                    i = j;
                 }
                 _ => {
                     let start = i;
@@ -654,6 +681,19 @@ mod tests {
     use super::*;
     use crate::snbt::from_snbt;
     use std::str::FromStr;
+
+    #[test]
+    fn display_parse_roundtrip_quoted_keys() {
+        for key in ["minecraft:keep_inventory", "has space", "quo\"te", "back\\slash", "ünïcode:x"] {
+            let p = TagPath(vec![PathSeg::Key("data".into()), PathSeg::Key(key.into()), PathSeg::Index(3)]);
+            let text = p.to_string();
+            assert_eq!(TagPath::from_str(&text).unwrap(), p, "{text}");
+        }
+        assert!(TagPath::from_str(".\"open").is_err());
+        let root: Tag = from_snbt("{data:{\"minecraft:pvp\":1b}}").unwrap();
+        let tp = TagPath::from_str("data.\"minecraft:pvp\"").unwrap();
+        assert_eq!(tp.resolve(&root), Some(&Tag::Byte(1)));
+    }
 
     fn demo() -> Tag {
         from_snbt(

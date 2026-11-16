@@ -597,9 +597,11 @@ fn parse_bedrock(
     }
     // Any other unrecognized Bedrock field is likewise reported (row 2).
     if let Some(entries) = stack.as_compound() {
-        const KNOWN: [&str; 10] = [
+        // `Block` is the placeable block's state, derived from `Name` —
+        // Java re-derives it from the id, so it is not a loss.
+        const KNOWN: [&str; 11] = [
             "Name", "Count", "Damage", "WasPickedUp", "display", "ench", "title", "author",
-            "pages", "Slot",
+            "pages", "Slot", "Block",
         ];
         for (key, _) in entries {
             if !KNOWN.contains(&key.as_str()) {

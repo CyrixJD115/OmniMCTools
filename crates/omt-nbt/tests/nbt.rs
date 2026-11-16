@@ -157,9 +157,9 @@ fn modified_utf8_roundtrip() {
         "", " ",
     ] {
         let mut enc = Vec::new();
-        string::encode_modified_utf8(s, &mut enc);
-        assert_eq!(string::decode_modified_utf8(&enc), s, "s={s:?}");
-        assert_eq!(string::encoded_len(s), enc.len());
+        string::encode(s, ByteOrder::Big, &mut enc);
+        assert_eq!(string::decode(&enc, ByteOrder::Big), s, "s={s:?}");
+        assert_eq!(string::encoded_len(s, ByteOrder::Big), enc.len());
         // NBT round-trip preserves it too.
         let nbt = Nbt { name: s.into(), tag: Tag::String(s.into()) };
         let bytes = omt_nbt::write(&nbt, ByteOrder::Big).unwrap();
@@ -172,14 +172,22 @@ fn modified_utf8_null_and_lossy() {
     // NUL encodes as C0 80 (2 bytes) — the whole point of modified UTF-8.
     let s = "a\0b";
     let mut enc = Vec::new();
-    string::encode_modified_utf8(s, &mut enc);
+    string::encode(s, ByteOrder::Big, &mut enc);
     assert_eq!(&enc, b"a\xc0\x80b");
-    assert_eq!(string::decode_modified_utf8(&enc), s);
+    assert_eq!(string::decode(&enc, ByteOrder::Big), s);
 
-    // Invalid lead byte decodes lossily instead of failing.
-    assert_eq!(string::decode_modified_utf8(&[0xff, 0xfe]), "\u{fffd}\u{fffd}");
-    // Truncated 3-byte sequence at end of buffer.
-    assert_eq!(string::decode_modified_utf8(&[0xe2, 0x9c]), "\u{fffd}");
+    // Invalid bytes decode losslessly via raw-byte escapes (re-encoding
+    // reproduces the original bytes instead of destroying them).
+    let raw = [0xff, 0xfe];
+    let s2 = string::decode(&raw, ByteOrder::Big);
+    let mut out = Vec::new();
+    string::encode(&s2, ByteOrder::Big, &mut out);
+    assert_eq!(out, raw.to_vec());
+    let raw3 = [0xe2, 0x9c];
+    let s3 = string::decode(&raw3, ByteOrder::Big);
+    let mut out3 = Vec::new();
+    string::encode(&s3, ByteOrder::Big, &mut out3);
+    assert_eq!(out3, raw3.to_vec());
 }
 
 // ---- seeded pseudo-random property test ---------------------------------
@@ -214,7 +222,17 @@ fn random_tag(rng: &mut Rng, depth: u8) -> Tag {
         7 => {
             let n = rng.below(8) as usize;
             Tag::String(std::string::String::from_iter((0..n).map(|_| {
-                char::from_u32(32 + (rng.below(0x10_ffff - 32) as u32)).unwrap_or('x')
+                // Skip the string codec's raw-byte escape range (U+F400..U+F4FF):
+                // chars there carry original bytes on the wire, so their char
+                // identity is intentionally not preserved (bytes are — see
+                // `string::tests::raw_bytes_round_trip`).
+                let cp = loop {
+                    let c = 32 + rng.below(0x10_ffff - 32) as u32;
+                    if !(0xF4000..0xF4100).contains(&c) {
+                        break c;
+                    }
+                };
+                char::from_u32(cp).unwrap_or('x')
             })))
         }
         8 => {
@@ -447,4 +465,33 @@ fn fixture_level_dat_edit_save_reload() {
     undo.undo(doc.root_mut()).unwrap();
     assert_eq!(doc.nbt.tag.get("keepinventory"), Some(&Tag::Byte(0)));
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn empty_list_element_type_is_preserved_via_hints() {
+    // An empty chest: vanilla writes the Items list with its true element
+    // type (Compound = 10) even while empty.
+    let nbt = Nbt {
+        name: String::new(),
+        tag: Tag::Compound(vec![
+            ("id".into(), Tag::String("minecraft:chest".into())),
+            ("Items".into(), Tag::List(Vec::new())),
+        ]),
+    };
+    // Simulate the game's bytes: declare the empty list as Compound.
+    let mut game_hints = omt_nbt::ListHints::new();
+    game_hints.insert("Items".into(), 0x0a);
+    let game_bytes = omt_nbt::write_with_list_hints(&nbt, ByteOrder::Little, &game_hints).unwrap();
+    assert_eq!(game_bytes[game_bytes.len() - 6], 0x0a, "empty list carries the compound type");
+
+    // A plain write loses the declared type…
+    let plain = omt_nbt::write(&nbt, ByteOrder::Little).unwrap();
+    assert_eq!(plain[plain.len() - 6], 0x00);
+
+    // …but hints captured at parse time restore byte fidelity.
+    let (parsed, _, hints) = omt_nbt::read_prefix_with_hints(&game_bytes, ByteOrder::Little).unwrap();
+    assert_eq!(parsed, nbt);
+    assert_eq!(hints.get("Items"), Some(&0x0a));
+    let faithful = omt_nbt::write_with_list_hints(&parsed, ByteOrder::Little, &hints).unwrap();
+    assert_eq!(faithful, game_bytes, "no-op round trip is byte-faithful");
 }

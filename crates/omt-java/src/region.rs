@@ -162,6 +162,18 @@ impl RegionFile {
         }
         // `len` counts the scheme byte; payload is len-1.
         let payload = &sector[5..5 + (len - 1).min(sector.len() - 5)];
+        if scheme & EXTERNAL_FLAG != 0 {
+            let ext = self.path.with_file_name(format!("c.{x}.{z}.mcc"));
+            let data = std::fs::read(&ext)
+                .map_err(|e| RegionError::Corrupt { x, z, reason: format!("external payload {}: {e}", ext.display()) })?;
+            return match scheme & !EXTERNAL_FLAG {
+                REGION_SCHEME_GZIP | REGION_SCHEME_ZLIB => Container::decode(&data)
+                    .map(|(d, _)| d)
+                    .map_err(|e| RegionError::Corrupt { x, z, reason: e.to_string() }),
+                REGION_SCHEME_NONE => Ok(data),
+                other => Err(RegionError::Corrupt { x, z, reason: format!("unknown scheme {other}") }),
+            };
+        }
         match scheme {
             REGION_SCHEME_GZIP | REGION_SCHEME_ZLIB => {
                 let (data, _) = Container::decode(payload)
@@ -253,14 +265,111 @@ impl RegionFile {
     }
 }
 
+impl RegionFile {
+    /// Rebuild this region with chunk `(x, z)` replaced by (or set to) the
+    /// uncompressed NBT payload `raw` (zlib, current timestamp). Every other
+    /// chunk is copied sector-verbatim. Used by the NBT editor to save an
+    /// edited chunk back into its region.
+    pub fn with_chunk(&self, bytes: &[u8], x: i32, z: i32, raw: &[u8], timestamp: u32) -> Vec<u8> {
+        let target = local_index(x, z);
+        let mut offsets = [0u8; 4096];
+        let mut times = [0u8; 4096];
+        let mut body: Vec<u8> = Vec::new();
+        let mut place = |idx: u16, entry: &[u8], ts: Option<u32>, body: &mut Vec<u8>| {
+            let sectors = entry.len().div_ceil(SECTOR_BYTES).max(1);
+            let offset = (HEADER_BYTES + body.len()) / SECTOR_BYTES;
+            let i = idx as usize * 4;
+            offsets[i] = (offset >> 16) as u8;
+            offsets[i + 1] = (offset >> 8) as u8;
+            offsets[i + 2] = offset as u8;
+            offsets[i + 3] = sectors as u8;
+            if let Some(t) = ts {
+                times[i..i + 4].copy_from_slice(&t.to_be_bytes());
+            }
+            body.extend_from_slice(entry);
+            body.resize(body.len().div_ceil(SECTOR_BYTES) * SECTOR_BYTES, 0);
+        };
+        let mut fresh = Vec::new();
+        let compressed = Container::Zlib.encode(raw);
+        if (compressed.len() + 5).div_ceil(SECTOR_BYTES) > MAX_INLINE_SECTORS {
+            // Vanilla's oversized form: stub + external c.x.z.mcc.
+            if let Some(dir) = self.path.parent() {
+                let _ = std::fs::write(dir.join(format!("c.{x}.{z}.mcc")), &compressed);
+            }
+            fresh.extend_from_slice(&1u32.to_be_bytes());
+            fresh.push(REGION_SCHEME_ZLIB | EXTERNAL_FLAG);
+        } else {
+            fresh.extend_from_slice(&(compressed.len() as u32 + 1).to_be_bytes());
+            fresh.push(REGION_SCHEME_ZLIB);
+            fresh.extend_from_slice(&compressed);
+        }
+        let mut wrote_target = false;
+        for (&idx, loc) in &self.locations {
+            if idx == target {
+                place(idx, &fresh, Some(timestamp), &mut body);
+                wrote_target = true;
+                continue;
+            }
+            let start = loc.offset_sectors as usize * SECTOR_BYTES;
+            let end = (start + loc.count_sectors as usize * SECTOR_BYTES).min(bytes.len());
+            if start < end {
+                place(idx, &bytes[start..end], self.timestamps.get(&idx).copied(), &mut body);
+            }
+        }
+        if !wrote_target {
+            place(target, &fresh, Some(timestamp), &mut body);
+        }
+        let mut image = Vec::with_capacity(HEADER_BYTES + body.len());
+        image.extend_from_slice(&offsets);
+        image.extend_from_slice(&times);
+        image.extend_from_slice(&body);
+        image
+    }
+}
+
 fn local_index(x: i32, z: i32) -> u16 {
     (((x & 31) + (z & 31) * 32) & 0x3ff) as u16
 }
 
 /// Build a region file image from chunk payloads (already-NBT-encoded bytes).
 /// Sector allocation is first-fit; the output is a valid `.mca`.
+/// One pending chunk: absolute coords, raw payload, timestamp.
+type PendingChunk = ((i32, i32), Vec<u8>, u32);
+
 pub struct RegionWriter {
-    entries: BTreeMap<u16, (Vec<u8>, u32)>, // index → (raw payload, timestamp)
+    /// local index → pending chunk
+    entries: BTreeMap<u16, PendingChunk>,
+}
+
+/// Largest sector count a location entry can express (one byte).
+pub const MAX_INLINE_SECTORS: usize = 255;
+/// Scheme-byte flag: the payload lives in `c.<x>.<z>.mcc` next to the region.
+pub const EXTERNAL_FLAG: u8 = 0x80;
+
+/// A finished region image plus any oversized chunks that must be written
+/// as external `c.<x>.<z>.mcc` files (compressed payload only).
+#[derive(Debug, Default)]
+pub struct RegionImage {
+    pub region: Vec<u8>,
+    pub externals: Vec<((i32, i32), Vec<u8>)>,
+}
+
+impl RegionImage {
+    /// Write the region and its external payloads into `dir` atomically
+    /// (temp + rename per file).
+    pub fn write_to(&self, dir: &Path, rx: i32, rz: i32) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        for ((x, z), data) in &self.externals {
+            let p = dir.join(format!("c.{x}.{z}.mcc"));
+            let tmp = p.with_extension("mcc.omt_tmp");
+            std::fs::write(&tmp, data)?;
+            std::fs::rename(&tmp, &p)?;
+        }
+        let p = dir.join(format!("r.{rx}.{rz}.mca"));
+        let tmp = p.with_extension("mca.omt_tmp");
+        std::fs::write(&tmp, &self.region)?;
+        std::fs::rename(&tmp, &p)
+    }
 }
 
 impl Default for RegionWriter {
@@ -276,7 +385,7 @@ impl RegionWriter {
 
     /// Insert a chunk (raw, uncompressed NBT bytes) at absolute coords.
     pub fn put(&mut self, x: i32, z: i32, raw: Vec<u8>, timestamp: u32) {
-        self.entries.insert(local_index(x, z), (raw, timestamp));
+        self.entries.insert(local_index(x, z), ((x, z), raw, timestamp));
     }
 
     pub fn is_empty(&self) -> bool {
@@ -284,34 +393,54 @@ impl RegionWriter {
     }
 
     /// Serialize with zlib-compressed payloads (current vanilla default).
+    /// Serialize with zlib payloads (vanilla default). Only for regions
+    /// whose chunks all fit inline (< 1 MiB compressed); use
+    /// [`Self::finish_image`] when a chunk may be oversized.
     pub fn finish(&self) -> Vec<u8> {
+        let image = self.finish_image();
+        debug_assert!(image.externals.is_empty(), "oversized chunk needs finish_image()");
+        image.region
+    }
+
+    /// Serialize, moving chunks that exceed 255 sectors to external
+    /// payloads exactly as vanilla does (scheme byte `2 | 0x80`, a 1-sector
+    /// stub in the region, data in `c.<x>.<z>.mcc`).
+    pub fn finish_image(&self) -> RegionImage {
         let mut offsets = [0u8; 4096];
         let mut times = [0u8; 4096];
         let mut body: Vec<u8> = Vec::new();
-        for (&idx, (raw, ts)) in &self.entries {
+        let mut externals = Vec::new();
+        for (&idx, (xz, raw, ts)) in &self.entries {
             let compressed = Container::Zlib.encode(raw);
-            let len = compressed.len() + 1; // scheme byte
-            let sectors = len.div_ceil(SECTOR_BYTES).max(1);
-            let offset = (HEADER_BYTES + body.len()) / SECTOR_BYTES;
-            offsets[idx as usize * 4] = (offset >> 16) as u8;
-            offsets[idx as usize * 4 + 1] = (offset >> 8) as u8;
-            offsets[idx as usize * 4 + 2] = offset as u8;
-            offsets[idx as usize * 4 + 3] = sectors as u8;
-            let t = ts.to_be_bytes();
-            times[idx as usize * 4..idx as usize * 4 + 4].copy_from_slice(&t);
-
-            let mut entry = Vec::with_capacity(sectors * SECTOR_BYTES);
-            entry.extend_from_slice(&(compressed.len() as u32 + 1).to_be_bytes());
-            entry.push(REGION_SCHEME_ZLIB);
-            entry.extend_from_slice(&compressed);
+            // 4-byte length + 1 scheme byte + payload: the length prefix
+            // counts toward the sectors (it was once left out, truncating
+            // chunks whose payload ended within 4 bytes of a boundary).
+            let mut entry = Vec::with_capacity(compressed.len() + 5);
+            if (compressed.len() + 5).div_ceil(SECTOR_BYTES) > MAX_INLINE_SECTORS {
+                entry.extend_from_slice(&1u32.to_be_bytes());
+                entry.push(REGION_SCHEME_ZLIB | EXTERNAL_FLAG);
+                externals.push((*xz, compressed));
+            } else {
+                entry.extend_from_slice(&(compressed.len() as u32 + 1).to_be_bytes());
+                entry.push(REGION_SCHEME_ZLIB);
+                entry.extend_from_slice(&compressed);
+            }
+            let sectors = entry.len().div_ceil(SECTOR_BYTES).max(1);
             entry.resize(sectors * SECTOR_BYTES, 0);
+            let offset = (HEADER_BYTES + body.len()) / SECTOR_BYTES;
+            let i = idx as usize * 4;
+            offsets[i] = (offset >> 16) as u8;
+            offsets[i + 1] = (offset >> 8) as u8;
+            offsets[i + 2] = offset as u8;
+            offsets[i + 3] = sectors as u8;
+            times[i..i + 4].copy_from_slice(&ts.to_be_bytes());
             body.extend_from_slice(&entry);
         }
-        let mut out = Vec::with_capacity(HEADER_BYTES + body.len());
-        out.extend_from_slice(&offsets);
-        out.extend_from_slice(&times);
-        out.extend_from_slice(&body);
-        out
+        let mut region = Vec::with_capacity(HEADER_BYTES + body.len());
+        region.extend_from_slice(&offsets);
+        region.extend_from_slice(&times);
+        region.extend_from_slice(&body);
+        RegionImage { region, externals }
     }
 }
 
@@ -359,6 +488,80 @@ mod tests {
         assert_eq!(omt_nbt::read(&raw, ByteOrder::Big).unwrap().tag.get("zPos").unwrap().as_i64(), Some(0));
 
         assert!(matches!(region.read_chunk(&bytes, 3, 7), Err(RegionError::Absent { .. })));
+    }
+
+    /// Incompressible payload of exactly `n` compressed bytes is hard to
+    /// target, so sweep sizes around the boundary and require every chunk
+    /// to read back — the old writer truncated some of them.
+    #[test]
+    fn sector_boundary_and_external_payloads() {
+        let dir = std::env::temp_dir().join(format!("omt-region-ext-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut seed = 12345u64;
+        let mut noise = |n: usize| -> Vec<u8> {
+            (0..n)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    seed as u8
+                })
+                .collect()
+        };
+        let mut w = RegionWriter::new();
+        let mut expect = Vec::new();
+        for (i, n) in (4060..4110).enumerate() {
+            let raw = noise(n);
+            let (x, z) = ((i % 32) as i32, (i / 32) as i32);
+            w.put(x, z, raw.clone(), 1);
+            expect.push(((x, z), raw));
+        }
+        let huge = noise(1_200_000); // > 255 sectors after (non-)compression
+        w.put(5, 9, huge.clone(), 1);
+        expect.push(((5, 9), huge));
+        let image = w.finish_image();
+        assert_eq!(image.externals.len(), 1);
+        image.write_to(&dir, 0, 0).unwrap();
+        let path = dir.join("r.0.0.mca");
+        let bytes = std::fs::read(&path).unwrap();
+        let region = RegionFile::from_bytes(&path, &bytes).unwrap();
+        for ((x, z), raw) in &expect {
+            assert_eq!(&region.read_raw(&bytes, *x, *z).unwrap(), raw, "chunk {x},{z}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retain_and_with_chunk_keep_others_verbatim() {
+        let mut w = RegionWriter::new();
+        for (x, z) in [(0, 0), (1, 0), (5, 7), (31, 31)] {
+            w.put(x, z, demo_chunk_nbt(x, z), 7);
+        }
+        let bytes = w.finish();
+        let path = Path::new("r.0.0.mca");
+        let region = RegionFile::from_bytes(path, &bytes).unwrap();
+
+        let kept = region.retain(&bytes, 0, 0, |x, _| x != 1);
+        assert_eq!(kept.removed, vec![(1, 0)]);
+        let image = kept.image.unwrap();
+        let r2 = RegionFile::from_bytes(path, &image).unwrap();
+        assert_eq!(r2.chunk_count(), 3);
+        for (x, z) in [(0, 0), (5, 7), (31, 31)] {
+            assert_eq!(r2.read_raw(&image, x, z).unwrap(), region.read_raw(&bytes, x, z).unwrap());
+            assert_eq!(r2.timestamp(x, z), Some(7));
+        }
+        assert!(region.retain(&bytes, 0, 0, |_, _| false).image.is_none(), "empty region → delete");
+
+        // Replace one chunk, add another; the rest stay byte-identical.
+        let edited = demo_chunk_nbt(99, 99);
+        let img = region.with_chunk(&bytes, 5, 7, &edited, 42);
+        let r3 = RegionFile::from_bytes(path, &img).unwrap();
+        assert_eq!(r3.read_raw(&img, 5, 7).unwrap(), edited);
+        assert_eq!(r3.timestamp(5, 7), Some(42));
+        assert_eq!(r3.read_raw(&img, 0, 0).unwrap(), region.read_raw(&bytes, 0, 0).unwrap());
+        let img2 = r3.with_chunk(&img, 2, 2, &edited, 1);
+        assert_eq!(RegionFile::from_bytes(path, &img2).unwrap().chunk_count(), 5);
     }
 
     #[test]

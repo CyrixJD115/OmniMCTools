@@ -272,50 +272,64 @@ use omt_world::{BedrockBiomeSlot, BlockState, Chunk, Slice};
     }
 
     #[test]
-    fn block_entities_pass_through_with_aggregate_row() {
+    fn block_entities_are_translated() {
         let mut chunk = bedrock_column();
         chunk.block_entities = vec![Tag::Compound(vec![
-            ("id".to_string(), Tag::String("minecraft:chest".into())),
+            ("id".to_string(), Tag::String("Chest".into())),
             ("x".to_string(), Tag::Int(48)),
             ("y".to_string(), Tag::Int(-64)),
             ("z".to_string(), Tag::Int(-80)),
+            ("isMovable".to_string(), Tag::Byte(1)),
+            (
+                "Items".to_string(),
+                Tag::List(vec![Tag::Compound(vec![
+                    ("Name".to_string(), Tag::String("minecraft:apple".into())),
+                    ("Count".to_string(), Tag::Byte(3)),
+                    ("Damage".to_string(), Tag::Short(0)),
+                    ("Slot".to_string(), Tag::Byte(4)),
+                    ("WasPickedUp".to_string(), Tag::Byte(0)),
+                ])]),
+            ),
         ])];
         let w = convert(&chunk);
         let root = parse(&w);
         let bes = root.get("block_entities").and_then(Tag::as_list).unwrap();
         assert_eq!(bes.len(), 1);
         assert_eq!(bes[0].get("id").and_then(Tag::as_str), Some("minecraft:chest"));
-        assert_eq!(w.report.count_with_kind(LossKind::UnsupportedComponent), 1);
+        assert!(bes[0].get("isMovable").is_none(), "Bedrock-only field dropped");
+        let item = &bes[0].get("Items").and_then(Tag::as_list).unwrap()[0];
+        assert_eq!(item.get("id").and_then(Tag::as_str), Some("minecraft:apple"));
+        assert_eq!(item.get("Slot").and_then(Tag::as_i64), Some(4));
     }
 
     #[test]
-    fn actors_get_id_rename_and_uuid_loss_row() {
+    fn actors_are_translated_to_java_entities() {
         let mut chunk = bedrock_column();
-        chunk.entities = vec![
+        let actor = |ident: &str, x: f32| {
             Tag::Compound(vec![
-                ("identifier".to_string(), Tag::String("minecraft:pig".into())),
+                ("identifier".to_string(), Tag::String(ident.into())),
                 ("UniqueID".to_string(), Tag::Long(42)),
-                ("Pos".to_string(), Tag::List(vec![Tag::Float(0.5), Tag::Float(64.0), Tag::Float(0.5)])),
-            ]),
-            Tag::Compound(vec![
-                ("id".to_string(), Tag::String("minecraft:pig".into())),
-                ("UUID".to_string(), Tag::IntArray(vec![1, 2, 3, 4])),
-            ]),
-        ];
+                ("Pos".to_string(), Tag::List(vec![Tag::Float(x), Tag::Float(64.0), Tag::Float(0.5)])),
+                ("Persistent".to_string(), Tag::Byte(1)),
+            ])
+        };
+        chunk.entities = vec![actor("minecraft:pig", 0.5), actor("minecraft:villager_v2", 2.5)];
         let w = convert(&chunk);
         assert_eq!(w.entities.len(), 2);
-        // identifier → id; everything else opaque.
-        let Tag::Compound(fields) = &w.entities[0] else { panic!() };
-        assert!(fields.iter().any(|(k, _)| k == "id"));
-        assert!(!fields.iter().any(|(k, _)| k == "identifier"));
-        // The actor that already had a UUID produced no extra loss.
+        assert_eq!(w.entities[0].get("id").and_then(Tag::as_str), Some("minecraft:pig"));
+        assert_eq!(w.entities[1].get("id").and_then(Tag::as_str), Some("minecraft:villager"));
+        assert!(w.entities[0].get("identifier").is_none());
+        // Java positions are Doubles; Bedrock's Floats are widened.
+        assert!(matches!(w.entities[1].get("Pos").and_then(Tag::as_list).unwrap()[0], Tag::Double(d) if d == 2.5));
+        assert_eq!(w.entities[0].get("PersistenceRequired").and_then(Tag::as_i64), Some(1));
+        assert!(w.entities[0].get("UUID").is_none(), "UUIDs are never invented");
         let uuid_rows = w
             .report
             .losses
             .iter()
             .filter(|l| l.kind == LossKind::FieldDropped && l.path == "entities")
             .count();
-        assert_eq!(uuid_rows, 1, "one UUID loss row for the one UUID-less actor");
+        assert_eq!(uuid_rows, 1, "one aggregate UUID row per chunk");
     }
 
     #[test]

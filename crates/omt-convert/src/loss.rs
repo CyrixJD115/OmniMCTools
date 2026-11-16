@@ -18,7 +18,7 @@ pub struct Loss {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LossKind {
     /// A field with no equivalent on the target edition was dropped
@@ -88,6 +88,18 @@ impl ConversionReport {
 
     pub fn count_with_kind(&self, kind: LossKind) -> usize {
         self.losses.iter().filter(|l| l.kind == kind).count()
+    }
+
+    /// Group losses by (kind, path, detail) — the "what got lost" summary
+    /// shown after a world conversion. Sorted by count, descending.
+    pub fn grouped(&self) -> Vec<(LossKind, String, String, usize)> {
+        let mut map: std::collections::HashMap<(LossKind, &str, &str), usize> = std::collections::HashMap::new();
+        for l in &self.losses {
+            *map.entry((l.kind, l.path.as_str(), l.detail.as_str())).or_default() += 1;
+        }
+        let mut out: Vec<_> = map.into_iter().map(|((k, p, d), n)| (k, p.to_string(), d.to_string(), n)).collect();
+        out.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.1.cmp(&b.1)));
+        out
     }
 
     /// Merge another report into this one (chunk-level aggregation).

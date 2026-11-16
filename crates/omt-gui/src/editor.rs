@@ -5,35 +5,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use omt_nbt::{ChildId, EditOp, NbtDocument, Tag, TagPath, UndoStack};
 use omt_nbt::snbt::{self, from_snbt};
 
+pub use crate::rows::{ChangeKind, Row};
+use crate::rows::collect_hits;
 /// Visible-row cap so giant documents (actor NBT, big arrays) stay fluid.
 const MAX_ROWS: usize = 1500;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChangeKind {
-    Added,
-    Edited,
-}
-
-#[derive(Debug, Clone)]
-pub struct Row {
-    pub path: TagPath,
-    pub depth: usize,
-    /// Display name (compound key, `[i]` for list items, `""` root label).
-    pub label: String,
-    pub type_name: &'static str,
-    /// SNBT for scalar/array rows (editable); `None` for containers.
-    pub value_snbt: Option<String>,
-    pub is_container: bool,
-    pub child_count: usize,
-    pub expanded: bool,
-    pub changed: Option<ChangeKind>,
-    pub search_hit: bool,
-    pub selected: bool,
-}
 
 #[derive(Debug, Clone)]
 pub enum EditorMsg {
@@ -58,11 +38,37 @@ pub enum EditorMsg {
     CopySelected,
     SnbtImportInput(String),
     PasteFromClipboard(String),
+    /// Ask the host to read the clipboard and send `PasteFromClipboard`.
+    RequestPaste,
     ApplyImport,
+}
+
+/// Where a document is saved. `File` documents save themselves (atomic +
+/// backup); the others set [`EditorTab::pending_save`] and the owning world
+/// session writes them into its workspace store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sink {
+    File,
+    /// A Java chunk inside a region file (big-endian NBT).
+    JavaChunk { region: PathBuf, x: i32, z: i32 },
+    /// One Bedrock LevelDB value holding a single little-endian NBT root.
+    BedrockKey(Vec<u8>),
+    /// A Bedrock value holding a *sequence* of LE roots (block entities
+    /// 0x31, pending ticks): edited as a root `entries` list.
+    BedrockSequence(Vec<u8>),
+    /// Several Bedrock actor records (one chunk's entities), edited as a
+    /// root `entries` list written back one key per entry.
+    BedrockActors(Vec<Vec<u8>>),
+    /// A file inside a world workspace: written atomically by the session
+    /// (no `.omt_backup` inside the workspace — the world Save keeps one).
+    WorkspaceFile(PathBuf),
 }
 
 pub struct EditorTab {
     pub doc: NbtDocument,
+    pub sink: Sink,
+    /// Set when a non-file document asked to be saved.
+    pub pending_save: bool,
     pub undo: UndoStack,
     /// `applied.len()` at last save; dirty when different.
     saved_ops: usize,
@@ -81,6 +87,23 @@ pub struct EditorTab {
     search_cursor: usize,
     pub snbt_import: String,
 
+    /// Lua extensions (shared app-wide); `None` in tests/CLI paths.
+    pub ext: Option<Arc<omt_script::Manager>>,
+    /// Empty-list element types per entry root, for sequence sinks
+    /// (Bedrock block entities / ticks / actors) — see `sink_bytes`.
+    pub entry_hints: Vec<omt_nbt::ListHints>,
+    /// Last extension pass: `(manager revision, document root, styles)` —
+    /// reused while the tree is unchanged so keystrokes never re-run Lua.
+    pub(crate) ext_cache: Option<(u64, Tag, HashMap<String, omt_script::RowStyle>)>,
+    /// Live styles for row rendering (kept in sync with `ext_cache`).
+    pub(crate) ext_styles: HashMap<String, omt_script::RowStyle>,
+    /// The tree state whose extension edit was last applied/undone (see
+    /// `rows::refresh_extensions`) — keyed by content, so undoing an
+    /// extension edit is respected until the tree changes otherwise.
+    pub(crate) ext_edited_input: Option<Tag>,
+    /// One-line health note ("2 extensions", "extension error: …").
+    pub ext_status: String,
+
     pub status: String,
     pub last_backup: Option<PathBuf>,
 }
@@ -92,8 +115,29 @@ impl EditorTab {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "untitled".into());
+        Ok(Self::with_doc(doc, title, Sink::File))
+    }
+
+    /// An in-memory document saved through `sink`.
+    pub fn from_nbt(title: String, nbt: omt_nbt::Nbt, order: omt_nbt::ByteOrder, sink: Sink) -> Self {
+        let doc = NbtDocument {
+            path: PathBuf::from(&title),
+            format: match order {
+                omt_nbt::ByteOrder::Big => omt_nbt::NbtFormat::RawBigEndian,
+                omt_nbt::ByteOrder::Little => omt_nbt::NbtFormat::RawLittleEndian,
+            },
+            nbt,
+            bedrock_storage_version: 0,
+            list_hints: std::collections::BTreeMap::new(),
+        };
+        Self::with_doc(doc, title, sink)
+    }
+
+    pub fn with_doc(doc: NbtDocument, title: String, sink: Sink) -> Self {
         let mut tab = Self {
             doc,
+            sink,
+            pending_save: false,
             undo: UndoStack::default(),
             saved_ops: 0,
             title,
@@ -109,11 +153,50 @@ impl EditorTab {
             search_hits: Vec::new(),
             search_cursor: 0,
             snbt_import: String::new(),
+            ext: None,
+            entry_hints: Vec::new(),
+            ext_cache: None,
+            ext_styles: HashMap::new(),
+            ext_edited_input: None,
+            ext_status: String::new(),
             status: String::new(),
             last_backup: None,
         };
         tab.rebuild();
-        Ok(tab)
+        tab
+    }
+
+    /// The owning session finished writing a pending save.
+    pub fn mark_saved(&mut self, status: String) {
+        self.pending_save = false;
+        self.saved_ops = self.undo.applied_ops().len();
+        self.status = status;
+    }
+
+    /// Attach the app-wide extension manager and run the first pass over
+    /// the just-opened document (so rows are decorated from the start).
+    pub fn set_extensions(&mut self, mgr: Arc<omt_script::Manager>) {
+        self.ext = Some(mgr);
+        self.ext_cache = None;
+        self.rebuild();
+    }
+
+    /// Serialized payload for the session-side sink write.
+    pub fn sink_bytes(&self) -> Result<Vec<u8>, String> {
+        match &self.sink {
+            Sink::BedrockSequence(_) | Sink::BedrockActors(_) => {
+                let entries = self.doc.root().get("entries").and_then(|t| t.as_list()).map(<[Tag]>::to_vec).unwrap_or_default();
+                let mut out = Vec::new();
+                for (i, e) in entries.iter().enumerate() {
+                    let nbt = omt_nbt::Nbt { name: String::new(), tag: e.clone() };
+                    let hints = self.entry_hints.get(i).cloned().unwrap_or_default();
+                    // Hints keep no-op saves byte-identical to the game's bytes.
+                    out.extend(omt_nbt::write_with_list_hints(&nbt, omt_nbt::ByteOrder::Little, &hints).map_err(|e| e.to_string())?);
+                }
+                Ok(out)
+            }
+            _ => self.doc.to_bytes().map_err(|e| e.to_string()),
+        }
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -141,7 +224,7 @@ impl EditorTab {
         self.rows.iter().find(|r| r.selected)
     }
 
-    pub fn update(&mut self, msg: EditorMsg) -> Vec<iced::Task<Message>> {
+    pub fn update(&mut self, msg: EditorMsg) -> Vec<iced::Task<EditorMsg>> {
         // Returned tasks (clipboard ops); kept small.
         match msg {
             EditorMsg::ToggleExpand(path) => {
@@ -218,6 +301,9 @@ impl EditorTab {
                 self.status = "pasted from clipboard — press Import to apply".into();
             }
             EditorMsg::ApplyImport => self.apply_import(),
+            EditorMsg::RequestPaste => {
+                return vec![iced::clipboard::read().map(|c| EditorMsg::PasteFromClipboard(c.unwrap_or_default()))];
+            }
         }
         Vec::new()
     }
@@ -460,6 +546,16 @@ impl EditorTab {
     }
 
     fn save(&mut self) {
+        if self.sink != Sink::File {
+            match self.sink_bytes() {
+                Ok(_) => {
+                    self.pending_save = true;
+                    self.status = "saving into the world workspace…".into();
+                }
+                Err(e) => self.status = format!("save aborted — document does not serialize: {e}"),
+            }
+            return;
+        }
         // Re-serialize first: a validation failure must not touch the disk.
         match self.doc.to_bytes() {
             Ok(_) => match self.doc.save() {
@@ -504,7 +600,8 @@ impl EditorTab {
         self.sync_inputs_to_selection();
     }
 
-    fn rebuild(&mut self) {
+    pub(crate) fn rebuild(&mut self) {
+        self.refresh_extensions();
         let changes: HashMap<String, ChangeKind> = self
             .undo
             .applied_ops()
@@ -526,6 +623,7 @@ impl EditorTab {
             changes: &'a HashMap<String, ChangeKind>,
             current_hit: &'a Option<String>,
             selected_str: &'a Option<String>,
+            ext_styles: &'a HashMap<String, omt_script::RowStyle>,
             rows: &'a mut Vec<Row>,
             truncated: &'a mut bool,
         }
@@ -554,6 +652,7 @@ impl EditorTab {
                 changed: ctx.changes.get(&path_str).copied(),
                 search_hit: ctx.current_hit.as_deref() == Some(path_str.as_str()),
                 selected: ctx.selected_str.as_deref() == Some(path_str.as_str()),
+                extra: ctx.ext_styles.get(&path_str).cloned(),
             });
             if !is_container || !ctx.expanded.contains(&path_str) {
                 return;
@@ -583,6 +682,7 @@ impl EditorTab {
             changes: &changes,
             current_hit: &current_hit,
             selected_str: &selected_str,
+            ext_styles: &self.ext_styles,
             rows: &mut rows,
             truncated: &mut truncated,
         };
@@ -592,40 +692,8 @@ impl EditorTab {
     }
 }
 
-fn collect_hits(tag: &Tag, q: &str, path: &mut TagPath, out: &mut Vec<TagPath>) {
-    let name_hit = matches!(path.last(), Some(omt_nbt::PathSeg::Key(k)) if k.contains(q));
-    let value_hit = match tag {
-        Tag::Compound(_) | Tag::List(_) => false,
-        scalar => {
-            let s = snbt::to_snbt(scalar);
-            s.len() <= 4096 && s.contains(q)
-        }
-    };
-    if name_hit || value_hit {
-        out.push(path.clone());
-    }
-    match tag {
-        Tag::Compound(entries) => {
-            for (k, v) in entries {
-                path.push_key_mut(k.clone());
-                collect_hits(v, q, path, out);
-                path.pop();
-            }
-        }
-        Tag::List(items) => {
-            for (i, v) in items.iter().enumerate() {
-                path.push_index_mut(i);
-                collect_hits(v, q, path, out);
-                path.pop();
-            }
-        }
-        _ => {}
-    }
-}
-
 fn path_of(s: &str) -> TagPath {
     use std::str::FromStr;
     TagPath::from_str(s).unwrap_or_default()
 }
 
-use crate::Message;

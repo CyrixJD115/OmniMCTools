@@ -244,8 +244,10 @@ fn synthetic_bedrock_to_java_world_roundtrip() {
     assert!(merged.count_with_kind(omt_convert::LossKind::UnmappedId) >= 1);
     assert!(!merged.is_clean());
 
-    // Entity region: entities/r.0.0.mca holds the Java 1.17 root shape.
-    let epath = dir.join("entities/r.0.0.mca");
+    // Entity region: a NEW target gets the 26.3 namespaced layout
+    // (dimensions/minecraft/<dim>/entities) with the Java root shape.
+    let epath = dir.join("dimensions/minecraft/overworld/entities/r.0.0.mca");
+    assert!(!dir.join("region").exists(), "no classic folders in a new target");
     assert!(epath.is_file(), "entity region written");
     let eregion = RegionFile::open(&epath).unwrap();
     let ebytes = std::fs::read(&epath).unwrap();
@@ -261,13 +263,16 @@ fn synthetic_bedrock_to_java_world_roundtrip() {
     assert!(entities[0].get("UUID").is_none(), "no UUID invented");
     let _ = RegionWriter::new; // keep the writer import exercised
 
-    // Nether entity regions land in DIM-1/entities (layout mirror check).
+    // Nether lands in the namespaced the_nether folder (layout mirror check).
     let mut nether_outcome =
         JavaDimensionOutcome { data_version: 4440, ..Default::default() };
     nether_outcome.writes.push(convert_one(&patterned_chunk(0, 0)));
     apply_java_conversions(&dir, 1, &mut nether_outcome, None).unwrap();
-    assert!(dir.join("DIM-1/entities/r.0.0.mca").is_file());
-    assert!(dir.join("DIM-1/region/r.0.0.mca").is_file());
+    assert!(dir.join("dimensions/minecraft/the_nether/entities/r.0.0.mca").is_file());
+    assert!(dir.join("dimensions/minecraft/the_nether/region/r.0.0.mca").is_file());
+    // And the reader resolves it.
+    let jw = omt_java::JavaWorld::open(&dir).unwrap();
+    assert_eq!(jw.list_chunks(1).unwrap(), vec![(0, 0)]);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

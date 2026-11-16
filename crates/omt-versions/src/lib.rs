@@ -44,6 +44,21 @@ pub fn load() -> Result<EditionVersions, RegistryError> {
 }
 
 impl EditionVersions {
+    /// `lastOpenedWithVersion` / `MinimumCompatibleClientVersion` stamp.
+    pub fn bedrock_level_version(&self) -> [u32; 5] {
+        self.bedrock_level_version
+    }
+
+    /// Bedrock `level.dat` header storage version written for new worlds
+    /// (fixture-verified: 10 for the 1.26.5x line).
+    pub fn bedrock_storage_version(&self) -> u32 {
+        10
+    }
+
+    pub fn java_release(&self) -> &str {
+        &self.java_release
+    }
+
     /// Java version gate: `Ok` when readable, `Err(found)` when below floor.
     pub fn check_java(&self, data_version: u32) -> Result<(), u32> {
         if data_version >= self.java_min_data_version {

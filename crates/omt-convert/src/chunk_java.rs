@@ -64,6 +64,9 @@ pub struct JavaChunk {
     pub block_entities: Vec<Tag>,
     pub block_ticks: usize,
     pub fluid_ticks: usize,
+    /// Entities from the chunk's entity region (`entities/r.x.z.mca`,
+    /// 1.17+ split) — filled by the pipeline, not by [`parse_java_chunk`].
+    pub entities: Vec<Tag>,
 }
 
 impl JavaChunk {

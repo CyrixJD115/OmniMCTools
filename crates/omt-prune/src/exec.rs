@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use omt_bedrock::BedrockWorld;
 use omt_java::{JavaWorld, RegionFile};
@@ -79,18 +80,20 @@ pub struct PruneReport {
 }
 
 /// A world opened for pruning. Always operate on a workspace copy.
+/// Handles are shared (`Arc`) so a GUI session can prune through the same
+/// store it renders from — one LevelDB handle per world.
 pub enum PruneWorld {
-    Java(Box<JavaWorld>),
-    Bedrock(Box<BedrockWorld>),
+    Java(Arc<JavaWorld>),
+    Bedrock(Arc<BedrockWorld>),
 }
 
 impl PruneWorld {
     /// Open writable. Detects the edition from the folder contents.
     pub fn open(root: &Path) -> PruneResult<Self> {
         match omt_world::detect(root).map_err(|e| PruneError::NotAWorld(e.to_string()))? {
-            omt_world::Detected::JavaFolder { .. } => Ok(Self::Java(Box::new(JavaWorld::open(root)?))),
+            omt_world::Detected::JavaFolder { .. } => Ok(Self::Java(Arc::new(JavaWorld::open(root)?))),
             omt_world::Detected::BedrockFolder { .. } => {
-                Ok(Self::Bedrock(Box::new(BedrockWorld::open_writable(root)?)))
+                Ok(Self::Bedrock(Arc::new(BedrockWorld::open_writable(root)?)))
             }
             omt_world::Detected::Archive(p) => Err(PruneError::NotAWorld(format!(
                 "{} is an archive; extract it into a workspace first",

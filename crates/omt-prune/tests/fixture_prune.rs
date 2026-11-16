@@ -10,6 +10,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use omt_bedrock::keys::{self, DbKey};
 use omt_java::RegionFile;
 use omt_prune::{Layer, PruneWorld, Selection, Shape, TimeOp};
 
@@ -121,4 +122,100 @@ fn bedrock_prune_is_dimension_exact() {
     let reopened = PruneWorld::open(&work).unwrap();
     assert_eq!(counts(&reopened), after, "survives compaction + reopen");
     let _ = std::fs::remove_dir_all(&work);
+}
+
+/// Raw LevelDB snapshot of a world: key → exact value bytes.
+fn raw_db(world_root: &Path) -> std::collections::BTreeMap<Vec<u8>, Vec<u8>> {
+    let w = omt_bedrock::BedrockWorld::open_read_only(world_root).unwrap();
+    w.iter_raw().unwrap().into_iter().collect()
+}
+
+/// Which (dim, x, z) column a chunk-related key belongs to (actors → their
+/// digp column; non-chunk keys → `None`).
+fn column_of(k: &[u8], actors_to_column: &std::collections::HashMap<[u8; 8], (u8, i32, i32)>) -> Option<(u8, i32, i32)> {
+    match keys::decode_key(k) {
+        DbKey::ChunkRecord { dim, x, z, .. } | DbKey::Subchunk { dim, x, z, .. } | DbKey::Digp { dim, x, z } => Some((dim, x, z)),
+        DbKey::Actor { id } => actors_to_column.get(&id[..]).copied(),
+        _ => None,
+    }
+}
+
+/// The exact flow a user runs: copy-on-open workspace → prune → optimize →
+/// save-as `.mcworld`. Every surviving record must come out **byte
+/// identical** to the source world's — no mutated blocks, no rewritten
+/// chunks, nothing invented; only the selected columns (and their entities)
+/// may be missing.
+#[test]
+#[ignore = "needs the Bedrock test world"]
+fn bedrock_prune_export_keeps_survivors_byte_identical() {
+    let Some(src) = fixture("OMT_BEDROCK_NETHER_FIXTURE", "../../../../test_worlds/bedrock-lostsurfur") else {
+        eprintln!("skipped: set OMT_BEDROCK_NETHER_FIXTURE");
+        return;
+    };
+    let before = raw_db(&src);
+
+    // Workspace copy (what the GUI opens).
+    let base = scratch("bedrock-export-base");
+    let ws = omt_world::workspace::Workspace::open(&src, &base).unwrap();
+
+    // Prune a split through the overworld inside the workspace.
+    let world = PruneWorld::open(ws.root()).unwrap();
+    let plan = world.plan(
+        0,
+        &Selection::new(vec![Layer::new(Shape::Split { x: 0.0, z: 0.0, angle_deg: 0.0 })]),
+    )
+    .unwrap();
+    assert!(!plan.selected.is_empty() && plan.kept() > 0, "fixture must exercise both sides");
+    let doomed: HashSet<(u8, i32, i32)> = plan.selected.iter().map(|&(x, z)| (0, x, z)).collect();
+    let report = world.execute(&plan).unwrap();
+    assert_eq!(report.chunks_deleted, plan.selected.len());
+    world.optimize().unwrap();
+    drop(world);
+
+    // Export as .mcworld (the file the user imports in-game).
+    let dest = base.join("pruning_test.mcworld");
+    ws.save_as(&dest).unwrap();
+
+    // Unpack the archive and snapshot its DB.
+    let unpack = base.join("unpacked");
+    let file = std::fs::File::open(&dest).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    zip.extract(&unpack).unwrap();
+    let after = raw_db(&unpack);
+
+    // Actor → column map from the *source* digps (actors of a deleted column
+    // must vanish; actors of surviving columns must stay). Keyed by the raw
+    // 8-byte actor id — exactly what `DbKey::Actor` carries.
+    let mut actors_to_column: std::collections::HashMap<[u8; 8], (u8, i32, i32)> = std::collections::HashMap::new();
+    for (k, v) in &before {
+        if let DbKey::Digp { dim, x, z } = keys::decode_key(k) {
+            for id in v.as_chunks::<8>().0 {
+                actors_to_column.insert(*id, (dim, x, z));
+            }
+        }
+    }
+
+    // Every surviving key must be byte-identical.
+    for (k, v) in &after {
+        match before.get(k) {
+            Some(old) => assert_eq!(old, v, "record {:02x?} mutated by prune+optimize+export", k),
+            None => panic!("record {:02x?} appeared out of nowhere", k),
+        }
+    }
+    // Everything missing must belong to a doomed column (or be its actor).
+    let mut deleted_records = 0usize;
+    for (k, v) in &before {
+        if after.contains_key(k) {
+            continue;
+        }
+        let owner = column_of(k, &actors_to_column).unwrap_or_else(|| panic!("non-chunk record {:02x?} deleted", k));
+        let _ = v;
+        assert!(doomed.contains(&owner) || matches!(keys::decode_key(k), DbKey::Actor { .. }), "record {:02x?} of {owner:?} deleted but column survives", k);
+        deleted_records += 1;
+    }
+    assert!(deleted_records > 0, "the prune must have deleted something");
+    // And the exported world still opens with our store.
+    let check = PruneWorld::open(&unpack).unwrap();
+    assert_eq!(check.scan(0, false).unwrap().len(), plan.kept());
+    let _ = std::fs::remove_dir_all(&base);
 }

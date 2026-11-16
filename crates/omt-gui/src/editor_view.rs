@@ -6,7 +6,7 @@ use iced::{Color, Element, Length};
 use crate::dictionary;
 use crate::editor::{ChangeKind, EditorMsg, EditorTab};
 use crate::style::{self, Btn};
-use crate::{Message, ACCENT, ADDED, EDITED, HIT, MUTED};
+use crate::{ACCENT, ADDED, EDITED, HIT, MUTED};
 
 pub enum Id {
     Search,
@@ -24,8 +24,12 @@ pub fn search_id() -> iced::widget::Id {
     iced::widget::Id::new(Id::Search.as_str())
 }
 
-pub fn view(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
-    let msg = move |m: EditorMsg| Message::EditorTab(tab_index, m);
+/// Wraps an editor message into the parent's message type.
+pub type Wrap<'a, M> = std::rc::Rc<dyn Fn(EditorMsg) -> M + 'a>;
+
+pub fn view<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> Element<'a, M> {
+    let w = wrap.clone();
+    let msg = move |m: EditorMsg| w(m);
 
     let dirty = if tab.is_dirty() { "● unsaved" } else { "saved" };
     let dirty_color = if tab.is_dirty() { EDITED } else { style::SUCCESS };
@@ -56,7 +60,7 @@ pub fn view(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
         text("Find").size(12).color(MUTED),
         text_input("name or value…", &tab.search_input)
             .id(search_id())
-            .on_input(move |q| Message::EditorTab(tab_index, EditorMsg::SearchInput(q)))
+            .on_input({ let w = wrap.clone(); move |q| w(EditorMsg::SearchInput(q)) })
             .size(13)
             .width(260)
             .style(style::input()),
@@ -72,7 +76,7 @@ pub fn view(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
     // ---- tree ---------------------------------------------------------------
     let mut tree = iced::widget::Column::new().spacing(1);
     for r in &tab.rows {
-        tree = tree.push(row_line(r, tab_index));
+        tree = tree.push(row_line(r, wrap.clone()));
     }
     if tab.truncated {
         tree = tree.push(
@@ -83,7 +87,7 @@ pub fn view(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
     }
 
     // ---- selection panel ----------------------------------------------------
-    let panel = selection_panel(tab, tab_index);
+    let panel = selection_panel(tab, wrap.clone());
 
     column![
         toolbar,
@@ -95,13 +99,14 @@ pub fn view(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
         ],
         iced::widget::rule::horizontal(1.0),
         text(tab.status.clone()).size(12).color(MUTED),
+        text(tab.ext_status.clone()).size(11).color(style::HINT),
     ]
     .spacing(6)
     .padding(8)
     .into()
 }
 
-fn tool_button(label: &str, kind: Btn, on_press: Option<Message>) -> button::Button<'_, Message> {
+fn tool_button<M: Clone>(label: &str, kind: Btn, on_press: Option<M>) -> button::Button<'_, M> {
     let b = button(text(label.to_string()).size(13)).style(style::button_style(kind));
     match on_press {
         Some(m) => b.on_press(m),
@@ -110,18 +115,19 @@ fn tool_button(label: &str, kind: Btn, on_press: Option<Message>) -> button::But
     .padding([5, 10])
 }
 
-fn row_line(r: &crate::editor::Row, tab_index: usize) -> Element<'_, Message> {
+fn row_line<'a, M: Clone + 'a>(r: &'a crate::editor::Row, wrap: Wrap<'a, M>) -> Element<'a, M> {
     let indent = "  ".repeat(r.depth);
     let marker = if r.is_container {
         if r.expanded { "▾" } else { "▸" }
     } else {
         " "
     };
+    let ext_color = r.extra_color();
     let name_color = match r.changed {
         Some(ChangeKind::Added) => ADDED,
         Some(ChangeKind::Edited) => EDITED,
         None if r.search_hit => HIT,
-        None => Color::WHITE,
+        None => ext_color.unwrap_or(Color::WHITE),
     };
     let (name, action) = if r.is_container {
         (
@@ -133,7 +139,7 @@ fn row_line(r: &crate::editor::Row, tab_index: usize) -> Element<'_, Message> {
     };
     let mut line = row![
         button(text(name).color(name_color).size(13))
-            .on_press(Message::EditorTab(tab_index, action))
+            .on_press(wrap(action))
             .style(style::button_style(Btn::Ghost))
             .padding(2),
     ]
@@ -155,14 +161,23 @@ fn row_line(r: &crate::editor::Row, tab_index: usize) -> Element<'_, Message> {
     if let Some(decoded) = r.value_snbt.as_deref().and_then(|v| dictionary::decode(&r.label, v)) {
         line = line.push(text(format!("= {decoded}")).size(12).color(ACCENT));
     }
+    // Extension-provided annotation (e.g. "day 3, 09:30 in-game").
+    if let Some(t) = r.extra_text() {
+        line = line.push(
+            container(text(format!("◆ {t}")).size(12).color(ext_color.unwrap_or(ACCENT)))
+                .padding([1, 6])
+                .style(style::card()),
+        );
+    }
     if r.selected {
         line = line.push(text(" ◂").size(12).color(ACCENT));
     }
     line.into()
 }
 
-fn selection_panel(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
-    let msg = move |m: EditorMsg| Message::EditorTab(tab_index, m);
+fn selection_panel<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> Element<'a, M> {
+    let w = wrap.clone();
+    let msg = move |m: EditorMsg| w(m);
     let mut panel = column![text("Selected tag").size(14)].spacing(8);
 
     match tab.selected_row() {
@@ -188,6 +203,21 @@ fn selection_panel(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
                         .width(Length::Fill),
                 );
             }
+            // Extension-provided description (below the dictionary entry).
+            if let Some(desc) = r.extra_description() {
+                panel = panel.push(
+                    container(
+                        column![
+                            text("Extension").size(11).color(MUTED),
+                            text(desc).size(12).color(r.extra_color().unwrap_or(ACCENT)),
+                        ]
+                        .spacing(2),
+                    )
+                    .style(style::card())
+                    .padding(8)
+                    .width(Length::Fill),
+                );
+            }
             if let Some(decoded) = r.value_snbt.as_deref().and_then(|v| dictionary::decode(&r.label, v)) {
                 panel = panel.push(
                     row![text("Meaning: ").size(12).color(MUTED), text(decoded).size(12).color(ACCENT)]
@@ -201,7 +231,7 @@ fn selection_panel(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
                 panel = panel.push(text("Value (SNBT — edit and press Enter)").size(12));
                 panel = panel.push(
                     text_input("e.g. 42, \"text\", 1.5f, [I; 1, 2]", &tab.value_input)
-                        .on_input(move |t| Message::EditorTab(tab_index, EditorMsg::ValueInput(t)))
+                        .on_input({ let w = wrap.clone(); move |t| w(EditorMsg::ValueInput(t)) })
                         .on_submit(msg(EditorMsg::CommitValue))
                         .size(13)
                         .style(style::input()),
@@ -221,7 +251,7 @@ fn selection_panel(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
                     panel = panel.push(text("Rename key").size(12));
                     panel = panel.push(
                         text_input("new name", &tab.name_input)
-                            .on_input(move |t| Message::EditorTab(tab_index, EditorMsg::NameInput(t)))
+                            .on_input({ let w = wrap.clone(); move |t| w(EditorMsg::NameInput(t)) })
                             .on_submit(msg(EditorMsg::CommitRename))
                             .size(13)
                             .style(style::input()),
@@ -232,8 +262,8 @@ fn selection_panel(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
                 panel = panel.push(
                     row![
                         action_button("Copy SNBT", Btn::Standard, msg(EditorMsg::CopySelected)),
-                        move_button("▲", EditorMsg::MoveUp, !r.path.is_root(), msg),
-                        move_button("▼", EditorMsg::MoveDown, !r.path.is_root(), msg),
+                        move_button("▲", EditorMsg::MoveUp, !r.path.is_root(), &msg),
+                        move_button("▼", EditorMsg::MoveDown, !r.path.is_root(), &msg),
                         action_button("Delete", Btn::Danger, msg(EditorMsg::DeleteSelected)),
                     ]
                     .spacing(6),
@@ -248,14 +278,14 @@ fn selection_panel(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
                 if is_compound {
                     panel = panel.push(
                         text_input("new tag name", &tab.add_name_input)
-                            .on_input(move |t| Message::EditorTab(tab_index, EditorMsg::AddNameInput(t)))
+                            .on_input({ let w = wrap.clone(); move |t| w(EditorMsg::AddNameInput(t)) })
                             .size(13)
                             .style(style::input()),
                     );
                 }
                 panel = panel.push(
                     text_input("value SNBT (empty = 0b)", &tab.add_value_input)
-                        .on_input(move |t| Message::EditorTab(tab_index, EditorMsg::AddValueInput(t)))
+                        .on_input({ let w = wrap.clone(); move |t| w(EditorMsg::AddValueInput(t)) })
                         .size(13)
                         .style(style::input()),
                 );
@@ -274,33 +304,33 @@ fn selection_panel(tab: &EditorTab, tab_index: usize) -> Element<'_, Message> {
     panel = panel.push(text("Paste SNBT").size(12));
     panel = panel.push(
         text_input("paste SNBT here…", &tab.snbt_import)
-            .on_input(move |t| Message::EditorTab(tab_index, EditorMsg::SnbtImportInput(t)))
+            .on_input({ let w = wrap.clone(); move |t| w(EditorMsg::SnbtImportInput(t)) })
             .size(13)
             .style(style::input()),
     );
     panel = panel.push(
         row![
             action_button("Import into selected compound", Btn::Standard, msg(EditorMsg::ApplyImport)),
-            action_button("Paste from clipboard", Btn::Standard, Message::PasteRequested(tab_index)),
+            action_button("Paste from clipboard", Btn::Standard, msg(EditorMsg::RequestPaste)),
         ]
         .spacing(6),
     );
     panel.into()
 }
 
-fn action_button(label: &str, kind: Btn, on_press: Message) -> button::Button<'_, Message> {
+fn action_button<M: Clone>(label: &str, kind: Btn, on_press: M) -> button::Button<'_, M> {
     button(text(label.to_string()).size(12))
         .on_press(on_press)
         .style(style::button_style(kind))
         .padding([5, 10])
 }
 
-fn move_button(
+fn move_button<M: Clone>(
     label: &str,
     m: EditorMsg,
     enabled: bool,
-    msg: impl Fn(EditorMsg) -> Message,
-) -> button::Button<'_, Message> {
+    msg: impl Fn(EditorMsg) -> M,
+) -> button::Button<'_, M> {
     let b = button(text(label.to_string()).size(12)).style(style::button_style(Btn::Standard));
     match enabled {
         true => b.on_press(msg(m)),

@@ -14,8 +14,18 @@ path = "src/main.rs"
 omt-nbt.workspace = true
 omt-world.workspace = true
 omt-versions.workspace = true
+omt-java.workspace = true
+omt-bedrock.workspace = true
+omt-convert.workspace = true
+omt-prune.workspace = true
+omt-render.workspace = true
+omt-script.workspace = true
 iced.workspace = true
 rfd = "0.17"
+serde.workspace = true
+toml = "0.8"
+serde_json.workspace = true
+dirs = "6"
 
 [lints]
 workspace = true

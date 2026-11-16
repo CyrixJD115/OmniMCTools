@@ -27,12 +27,17 @@
 //! - [`pipeline`] — rayon per-chunk `read → parse → remap → serialize` and
 //!   the apply step (M3 converter core), both directions.
 
+pub mod biomes;
+pub mod block_entities;
 pub mod chunk_bedrock;
 pub mod chunk_java;
 pub mod chunk_to_java;
 pub mod entities;
+pub mod entity_convert;
 pub mod error;
 pub mod items;
+pub mod level;
+pub mod world;
 pub mod loss;
 pub mod pipeline;
 pub mod proto;

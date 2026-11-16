@@ -153,10 +153,45 @@ impl BedrockWorld {
 
     /// Full decoded chunk.
     pub fn read_chunk_full(&self, dim: u8, x: i32, z: i32) -> WorldResult<Option<Chunk>> {
-        let version = self.chunk_version(dim, x, z)?.unwrap_or(0);
-        let has_data3d = self.get(&keys::data3d_key(x, z, dim))?.is_some();
-        let has_finalized =
-            self.get(&keys::chunk_record(x, z, dim, tag::FINALIZED_STATE))?.is_some();
+        let records = self.column_records(dim, x, z)?;
+        Self::decode_column(dim, x, z, &records)
+    }
+
+    /// The raw records of one chunk column that decoding needs (version,
+    /// data3D, finalized, block entities, subchunks −4..19) plus the
+    /// column's actors. Call serially (the handle is a mutex); pair with
+    /// [`Self::decode_column`] on worker threads.
+    pub fn column_records(&self, dim: u8, x: i32, z: i32) -> WorldResult<ColumnRecords> {
+        // Point reads only: `Db::snapshot()` in bedrock-leveldb materializes
+        // the whole database, so per-column snapshots are ruinous.
+        let mut records = std::collections::HashMap::new();
+        let mut wanted: Vec<Vec<u8>> = [tag::VERSION, tag::DATA_3D, tag::FINALIZED_STATE, tag::BLOCK_ENTITIES]
+            .iter()
+            .map(|&t| keys::chunk_record(x, z, dim, t))
+            .collect();
+        wanted.extend((-4i8..=19).map(|y| keys::subchunk_key(x, z, dim, y)));
+        for k in wanted {
+            if let Some(v) = self.get(&k)? {
+                records.insert(k, v);
+            }
+        }
+        let mut actors = Vec::new();
+        if let Some(digp) = self.get(&keys::digp_key(x, z, dim))? {
+            for id in digp.as_chunks::<8>().0 {
+                if let Some(raw) = self.get(&keys::actor_key(*id))? {
+                    actors.push(raw);
+                }
+            }
+        }
+        Ok(ColumnRecords { records, actors })
+    }
+
+    /// Decode a column from its raw records (no database access).
+    pub fn decode_column(dim: u8, x: i32, z: i32, cols: &ColumnRecords) -> WorldResult<Option<Chunk>> {
+        let rec = |k: &[u8]| cols.records.get(k);
+        let version = rec(&keys::version_key(x, z, dim)).and_then(|v| v.first().copied()).unwrap_or(0);
+        let has_data3d = rec(&keys::data3d_key(x, z, dim)).is_some();
+        let has_finalized = rec(&keys::chunk_record(x, z, dim, tag::FINALIZED_STATE)).is_some();
         let mut chunk = Chunk {
             x,
             z,
@@ -167,8 +202,8 @@ impl BedrockWorld {
         };
 
         // data3D: heightmap + biomes.
-        if let Some(raw) = self.get(&keys::data3d_key(x, z, dim))? {
-            match Data3d::parse(&raw) {
+        if let Some(raw) = rec(&keys::data3d_key(x, z, dim)) {
+            match Data3d::parse(raw) {
                 Ok(d) => {
                     chunk.heightmaps = vec![(
                         "bedrock_2d".into(),
@@ -190,11 +225,11 @@ impl BedrockWorld {
         // has a version record, data3D, or any subchunk at all.
         let mut any_subchunk = false;
         for y in -4i8..=19 {
-            let Some(raw) = self.get(&keys::subchunk_key(x, z, dim, y))? else {
+            let Some(raw) = rec(&keys::subchunk_key(x, z, dim, y)) else {
                 continue;
             };
             any_subchunk = true;
-            let sub = Subchunk::parse(&raw, Some(y)).map_err(|e| {
+            let sub = Subchunk::parse(raw, Some(y)).map_err(|e| {
                 WorldError::Corrupt {
                     context: format!("subchunk y={y} at ({x},{z}) dim {dim}"),
                     source: Box::new(e),
@@ -227,7 +262,7 @@ impl BedrockWorld {
         // Block entities (0x31): a sequence of little-endian NBT roots, one
         // per entity (fixture-verified: trailing-data error revealed the
         // concatenation).
-        if let Some(raw) = self.get(&keys::chunk_record(x, z, dim, tag::BLOCK_ENTITIES))? {
+        if let Some(raw) = rec(&keys::chunk_record(x, z, dim, tag::BLOCK_ENTITIES)) {
             let mut pos = 0usize;
             while pos < raw.len() {
                 let (nbt, consumed) = omt_nbt::read_prefix(&raw[pos..], ByteOrder::Little)
@@ -246,19 +281,35 @@ impl BedrockWorld {
             }
         }
 
-        // Actors: digp → actor ids → actorprefix NBT.
-        if let Some(digp) = self.get(&keys::digp_key(x, z, dim))? {
-            for id_bytes in digp.as_chunks::<8>().0 {
-                let mut id = [0u8; 8];
-                id.copy_from_slice(id_bytes);
-                if let Some(raw) = self.get(&keys::actor_key(id))?
-                    && let Ok(nbt) = omt_nbt::read(&raw, ByteOrder::Little) {
-                        chunk.entities.push(nbt.tag);
-                    }
+        // Actors (digp → actorprefix NBT), gathered by `column_records`.
+        for raw in &cols.actors {
+            if let Ok(nbt) = omt_nbt::read(raw, ByteOrder::Little) {
+                chunk.entities.push(nbt.tag);
             }
         }
 
         Ok(Some(chunk))
+    }
+
+    /// Every key with its value length — the LevelDB browser index (values
+    /// are fetched on demand, so huge worlds don't load into memory).
+    pub fn key_index(&self) -> WorldResult<Vec<(Vec<u8>, usize)>> {
+        let snapshot = self
+            .db()
+            .snapshot()
+            .map_err(|e| WorldError::Store(format!("leveldb snapshot: {e}")))?;
+        Ok(snapshot.iter().map(|(k, v)| (k.to_vec(), v.len())).collect())
+    }
+
+    /// Delete raw keys (NBT editor / LevelDB browser).
+    pub fn raw_delete_many(&self, keys: &[Vec<u8>]) -> WorldResult<()> {
+        let mut batch = WriteBatch::new();
+        for k in keys {
+            batch.delete(k.clone());
+        }
+        self.db()
+            .write(batch, WriteOptions::default())
+            .map_err(|e| WorldError::Store(format!("leveldb write: {e}")))
     }
 
     /// Every raw database key/value (LevelDB browser backend).
@@ -271,6 +322,14 @@ impl BedrockWorld {
             .map_err(|e| WorldError::Store(format!("leveldb snapshot: {e}")))?;
         Ok(snapshot.iter().map(|(k, v)| (k.to_vec(), v.to_vec())).collect())
     }
+}
+
+/// Raw records of one chunk column ([`BedrockWorld::column_records`]).
+#[derive(Debug, Clone, Default)]
+pub struct ColumnRecords {
+    pub records: std::collections::HashMap<Vec<u8>, Vec<u8>>,
+    /// Actor NBT payloads referenced by the column's `digp`.
+    pub actors: Vec<Vec<u8>>,
 }
 
 /// What [`BedrockWorld::delete_columns`] removed.
@@ -306,8 +365,8 @@ impl BedrockWorld {
         let mut victims: Vec<Vec<u8>> = Vec::new();
         let mut touched = std::collections::HashSet::new();
         let mut stats = DeleteStats::default();
-        for (k, v) in snapshot.iter() {
-            let hit = match keys::decode_key(&k) {
+        let mut consider = |k: &[u8], v: &[u8]| {
+            let hit = match keys::decode_key(k) {
                 DbKey::ChunkRecord { x, z, dim: d, .. } | DbKey::Subchunk { x, z, dim: d, .. }
                     if d == dim && columns.contains(&(x, z)) =>
                 {
@@ -326,6 +385,23 @@ impl BedrockWorld {
                 touched.insert(xz);
                 victims.push(k.to_vec());
                 stats.records += 1;
+            }
+        };
+        // Few columns: targeted prefix scans, decoded-key filtered (an
+        // overworld base is a byte prefix of same-x,z nether/end keys).
+        // Many columns: one pass over the whole database.
+        if columns.len() <= 256 {
+            for &(x, z) in columns {
+                for (k, v) in snapshot.scan_prefix(&keys::chunk_base(x, z, dim)) {
+                    consider(&k, &v);
+                }
+                for (k, v) in snapshot.scan_prefix(&keys::digp_key(x, z, dim)) {
+                    consider(&k, &v);
+                }
+            }
+        } else {
+            for (k, v) in snapshot.iter() {
+                consider(&k, &v);
             }
         }
         drop(snapshot);

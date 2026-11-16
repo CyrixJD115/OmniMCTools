@@ -62,6 +62,10 @@ pub struct NbtDocument {
     pub nbt: Nbt,
     /// Bedrock level.dat storage version (format-provenance).
     pub bedrock_storage_version: u32,
+    /// Empty-list element types from the original bytes (see
+    /// [`omt_nbt::ListHints`]) — honored on write so no-op saves stay
+    /// byte-identical.
+    pub list_hints: crate::ListHints,
 }
 
 impl NbtDocument {
@@ -74,9 +78,9 @@ impl NbtDocument {
     /// Load a raw little-endian payload (caller knows the provenance).
     pub fn load_le(path: &Path) -> Result<Self, DocumentError> {
         let bytes = std::fs::read(path).map_err(|source| DocumentError::Io { path: path.to_path_buf(), source })?;
-        let nbt = crate::read(&bytes, ByteOrder::Little)
+        let (nbt, _, list_hints) = crate::read_prefix_with_hints(&bytes, ByteOrder::Little)
             .map_err(|source| DocumentError::Parse { path: path.to_path_buf(), source })?;
-        Ok(Self { path: path.to_path_buf(), format: NbtFormat::RawLittleEndian, nbt, bedrock_storage_version: 0 })
+        Ok(Self { path: path.to_path_buf(), format: NbtFormat::RawLittleEndian, nbt, bedrock_storage_version: 0, list_hints })
     }
 
     pub fn from_bytes(path: &Path, bytes: &[u8]) -> Result<Self, DocumentError> {
@@ -84,38 +88,46 @@ impl NbtDocument {
         if crate::document::looks_like_bedrock_level_dat(bytes) {
             let ld = BedrockLevelDat::parse(bytes)
                 .map_err(|source| DocumentError::Parse { path: path.to_path_buf(), source })?;
+            // level.dat payloads are written by the game through the same LE
+            // NBT codec — capture its empty-list types for faithful saves.
+            let list_hints = crate::read_prefix_with_hints(&bytes[8..], ByteOrder::Little)
+                .map(|(_, _, h)| h)
+                .unwrap_or_default();
             return Ok(Self {
                 path: path.to_path_buf(),
                 format: NbtFormat::BedrockLevelDat,
                 nbt: ld.nbt,
                 bedrock_storage_version: ld.storage_version,
+                list_hints,
             });
         }
         match Container::detect(bytes) {
             Container::Gzip => {
                 let (payload, _) = Container::decode(bytes)
                     .map_err(|source| DocumentError::Parse { path: path.to_path_buf(), source })?;
-                let nbt = crate::read(&payload, ByteOrder::Big)
+                let (nbt, _, list_hints) = crate::read_prefix_with_hints(&payload, ByteOrder::Big)
                     .map_err(|source| DocumentError::Parse { path: path.to_path_buf(), source })?;
-                Ok(Self { path: path.to_path_buf(), format: NbtFormat::JavaGzip, nbt, bedrock_storage_version: 0 })
+                Ok(Self { path: path.to_path_buf(), format: NbtFormat::JavaGzip, nbt, bedrock_storage_version: 0, list_hints })
             }
             Container::Raw => {
                 // Raw payloads are order-ambiguous at the byte level; default
                 // to big-endian (Java convention). Bedrock callers that know
                 // their provenance use [`NbtDocument::load_le`].
-                match crate::read(bytes, ByteOrder::Big) {
-                    Ok(nbt) => Ok(Self {
+                match crate::read_prefix_with_hints(bytes, ByteOrder::Big) {
+                    Ok((nbt, _, list_hints)) => Ok(Self {
                         path: path.to_path_buf(),
                         format: NbtFormat::RawBigEndian,
                         nbt,
                         bedrock_storage_version: 0,
+                        list_hints,
                     }),
-                    Err(be_err) => match crate::read(bytes, ByteOrder::Little) {
-                        Ok(nbt) => Ok(Self {
+                    Err(be_err) => match crate::read_prefix_with_hints(bytes, ByteOrder::Little) {
+                        Ok((nbt, _, list_hints)) => Ok(Self {
                             path: path.to_path_buf(),
                             format: NbtFormat::RawLittleEndian,
                             nbt,
                             bedrock_storage_version: 0,
+                            list_hints,
                         }),
                         Err(le_err) => Err(DocumentError::Parse {
                             path: path.to_path_buf(),
@@ -141,15 +153,17 @@ impl NbtDocument {
                 ld.serialize().map_err(|e| DocumentError::Save(e.to_string()))
             }
             NbtFormat::JavaGzip => {
-                let payload = crate::write(&self.nbt, ByteOrder::Big)
+                let payload = crate::write_with_list_hints(&self.nbt, ByteOrder::Big, &self.list_hints)
                     .map_err(|e| DocumentError::Save(e.to_string()))?;
                 Ok(Container::Gzip.encode(&payload))
             }
             NbtFormat::RawBigEndian => {
-                crate::write(&self.nbt, ByteOrder::Big).map_err(|e| DocumentError::Save(e.to_string()))
+                crate::write_with_list_hints(&self.nbt, ByteOrder::Big, &self.list_hints)
+                    .map_err(|e| DocumentError::Save(e.to_string()))
             }
             NbtFormat::RawLittleEndian => {
-                crate::write(&self.nbt, ByteOrder::Little).map_err(|e| DocumentError::Save(e.to_string()))
+                crate::write_with_list_hints(&self.nbt, ByteOrder::Little, &self.list_hints)
+                    .map_err(|e| DocumentError::Save(e.to_string()))
             }
         }
     }

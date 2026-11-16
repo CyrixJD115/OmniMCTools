@@ -83,6 +83,18 @@ pub fn bedrock_chunk_to_java(
     filter: &ProtoFilter,
     data_version: u32,
 ) -> Result<BedrockConversion, crate::error::ConvertError> {
+    bedrock_chunk_to_java_with(chunk, rules, &rules.reverse(), filter, data_version)
+}
+
+/// [`bedrock_chunk_to_java`] with a pre-built inverse table — building it
+/// costs ~80 ms (35k entries), so batch callers build it once.
+pub fn bedrock_chunk_to_java_with(
+    chunk: &Chunk,
+    rules: &RegistryRules,
+    reverse: &crate::rules::ReverseBlockRules,
+    filter: &ProtoFilter,
+    data_version: u32,
+) -> Result<BedrockConversion, crate::error::ConvertError> {
     let mut report = ConversionReport::new();
     if filter.should_drop(ChunkEra::Modern, chunk.status.as_deref()) {
         filter.record_skip(
@@ -95,15 +107,26 @@ pub fn bedrock_chunk_to_java(
         return Ok(BedrockConversion::SkippedProto { report });
     }
 
+    // Tiles whose data is the Java *block* (bed/banner color, potted
+    // plant, head type): position → tile, applied per section below.
+    let overrides: std::collections::HashMap<(usize, i32, usize), &Tag> = chunk
+        .block_entities
+        .iter()
+        .filter(|be| matches!(be.get("id").and_then(Tag::as_str), Some("Bed" | "Banner" | "FlowerPot" | "Skull")))
+        .filter_map(|be| {
+            let (x, y, z) = (be.get("x")?.as_i64()?, be.get("y")?.as_i64()?, be.get("z")?.as_i64()?);
+            Some(((x.rem_euclid(16) as usize, y as i32, z.rem_euclid(16) as usize), be))
+        })
+        .collect();
+
     let mut sections: Vec<Tag> = Vec::new();
     // The Bedrock→Java state inverse, derived once per chunk from the one
-    // rule table (see `rules::ReverseBlockRules`).
-    let reverse = rules.reverse();
+    // rule table (see `rules::ReverseBlockRules`), built by the caller.
     for (slot_y, slice) in &chunk.slices {
         if is_all_air(slice) {
             continue; // empty sections are omitted entirely
         }
-        let section = section_nbt(*slot_y, slice, chunk, rules, &reverse, &mut report)?;
+        let section = section_nbt(*slot_y, slice, chunk, rules, reverse, &overrides, &mut report)?;
         sections.push(section);
     }
 
@@ -133,19 +156,18 @@ pub fn bedrock_chunk_to_java(
         ),
     ];
     if !chunk.block_entities.is_empty() {
-        root.push(("block_entities".to_string(), Tag::List(chunk.block_entities.clone())));
-        report.record(
-            LossKind::UnsupportedComponent,
-            "block_entities",
-            format!(
-                "{} block entities passed through untranslated; field-level \
-                 Bedrock→Java tile mapping arrives with the registry",
-                chunk.block_entities.len()
-            ),
-        );
+        let items = crate::items::ItemConvertOpts { enchant_ids: rules.enchant_id_map(), ..Default::default() };
+        let block_at = |_x: i32, _y: i32, _z: i32| None;
+        let mut ctx = crate::block_entities::BeCtx { items: &items, block_at: &block_at, report: &mut report };
+        let tiles: Vec<Tag> = chunk
+            .block_entities
+            .iter()
+            .filter_map(|be| crate::block_entities::bedrock_to_java(be, &mut ctx))
+            .collect();
+        root.push(("block_entities".to_string(), Tag::List(tiles)));
     }
 
-    let entities = java_entities(chunk, &mut report);
+    let entities = java_entities(chunk, rules, &mut report);
     let chunk_nbt = omt_nbt::write(
         &Nbt { name: String::new(), tag: Tag::Compound(root) },
         ByteOrder::Big,
@@ -180,6 +202,7 @@ fn section_nbt(
     chunk: &Chunk,
     rules: &RegistryRules,
     reverse: &crate::rules::ReverseBlockRules,
+    overrides: &std::collections::HashMap<(usize, i32, usize), &Tag>,
     report: &mut ConversionReport,
 ) -> Result<Tag, crate::error::ConvertError> {
     // Palette: Bedrock → Java through the derived inverse table (exact
@@ -199,11 +222,27 @@ fn section_nbt(
         };
         index_map.push(idx as u16);
     }
-    let indices: Vec<u16> = slice
+    let mut indices: Vec<u16> = slice
         .indices
         .iter()
         .map(|&i| index_map.get(i as usize).copied().unwrap_or(0))
         .collect();
+    // Tile-driven block rewrites (bed/banner color, potted plant, heads).
+    let base_y = slot_y as i32 * 16;
+    for (&(lx, y, lz), be) in overrides {
+        if y < base_y || y >= base_y + 16 {
+            continue;
+        }
+        let i = ((y - base_y) as usize) * 256 + lz * 16 + lx;
+        let Some(current) = indices.get(i).and_then(|&p| palette.get(p as usize)).cloned() else { continue };
+        if let Some(new) = crate::block_entities::java_block_override(be, &current) {
+            let idx = palette.iter().position(|s| *s == new).unwrap_or_else(|| {
+                palette.push(new);
+                palette.len() - 1
+            });
+            indices[i] = idx as u16;
+        }
+    }
 
     let mut fields = vec![
         ("Y".to_string(), Tag::Byte(slot_y)),
@@ -464,57 +503,24 @@ fn heightmap_for_java(chunk: &Chunk, report: &mut ConversionReport) -> Vec<u16> 
 /// `UniqueID` (Long) and **no** `UUID` IntArray. Java entities carry `id`,
 /// so the rename is applied here; a missing UUID is a per-chunk loss row —
 /// never invented.
-fn java_entities(chunk: &Chunk, report: &mut ConversionReport) -> Vec<Tag> {
+fn java_entities(chunk: &Chunk, rules: &RegistryRules, report: &mut ConversionReport) -> Vec<Tag> {
     if chunk.entities.is_empty() {
         return Vec::new();
     }
-    let mut out = Vec::with_capacity(chunk.entities.len());
-    let mut renamed = 0usize;
-    let mut no_uuid = 0usize;
-    for actor in &chunk.entities {
-        let Tag::Compound(fields) = actor else { continue };
-        let mut converted: Vec<(String, Tag)> = fields
-            .iter()
-            .map(|(k, v)| {
-                if k == "identifier" {
-                    renamed += 1;
-                    ("id".to_string(), v.clone())
-                } else {
-                    (k.clone(), v.clone())
-                }
-            })
-            .collect();
-        if !converted.iter().any(|(k, _)| k == "UUID") {
-            no_uuid += 1;
-        }
-        out.push(Tag::Compound(std::mem::take(&mut converted)));
-    }
-    if renamed > 0 {
-        report.record(
-            LossKind::ValueCoerced,
-            "entities",
-            format!("{renamed} actors' `identifier` renamed to Java's `id`"),
-        );
-    }
-    if no_uuid > 0 {
+    let items = crate::items::ItemConvertOpts { enchant_ids: rules.enchant_id_map(), ..Default::default() };
+    let out: Vec<Tag> = chunk
+        .entities
+        .iter()
+        .filter_map(|a| crate::entity_convert::bedrock_to_java(a, &items, report))
+        .collect();
+    if !out.is_empty() {
         report.record(
             LossKind::FieldDropped,
             "entities",
-            format!(
-                "{no_uuid} actors carry no Java UUID (Bedrock's UniqueID is a numeric \
-                 id, not a UUID); written without one — not invented"
-            ),
+            "Bedrock actors carry no Java UUID (UniqueID is numeric); written without one — \
+             Java assigns a fresh UUID on load (never invented here)",
         );
     }
-    report.record(
-        LossKind::UnsupportedComponent,
-        "entities",
-        format!(
-            "{} actors passed through untranslated; Bedrock-only fields and \
-             per-entity mapping arrive with the registry (M4)",
-            chunk.entities.len()
-        ),
-    );
     out
 }
 

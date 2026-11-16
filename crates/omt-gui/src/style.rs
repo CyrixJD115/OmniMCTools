@@ -111,3 +111,40 @@ pub fn input() -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
         }
     }
 }
+
+/// Sidebar / side-panel surface (UMT left control column).
+pub fn panel() -> impl Fn(&Theme) -> container::Style {
+    move |_theme| container::Style {
+        background: Some(Background::Color(PANEL)),
+        text_color: Some(FG),
+        border: border::Border { color: BORDER, width: 1.0, radius: 0.0.into() },
+        ..Default::default()
+    }
+}
+
+pub(crate) fn version_label(w: &omt_world::WorldSummary) -> String {
+    if let Some(dv) = w.java_data_version {
+        match crate::dictionary::data_version_name(i64::from(dv)) {
+            Some(name) => format!("{name} · DataVersion {dv}"),
+            None => format!("DataVersion {dv}"),
+        }
+    } else if let Some(v) = w.bedrock_last_opened {
+        format!("{}.{}.{}", v[0], v[1], v[2])
+    } else {
+        "unknown version".into()
+    }
+}
+
+pub(crate) fn omnitheme() -> iced::Theme {
+    Theme::custom(
+        "OmniMCTools",
+        iced::theme::Palette {
+            background: BG,
+            text: FG,
+            primary: ACCENT,
+            success: SUCCESS,
+            warning: WARN,
+            danger: DANGER,
+        },
+    )
+}

@@ -121,8 +121,10 @@ impl RegistryRules {
     pub fn embedded() -> &'static Self {
         static EMBEDDED: OnceLock<RegistryRules> = OnceLock::new();
         EMBEDDED.get_or_init(|| {
-            ron::from_str(EMBEDDED_TABLE)
-                .expect("embedded data/registry.ron is generated and unit-tested")
+            let mut rules: RegistryRules = ron::from_str(EMBEDDED_TABLE)
+                .expect("embedded data/registry.ron is generated and unit-tested");
+            rules.add_modern_biome_aliases();
+            rules
         })
     }
 
@@ -288,11 +290,36 @@ impl RegistryRules {
     /// alphabetically-first name per id wins (`snowy_plains` over
     /// `snowy_tundra`, `badlands` over `mesa`).
     pub fn biome_names(&self) -> BTreeMap<i32, String> {
-        let mut out = BTreeMap::new();
+        // Only ever emit valid Java names: a direct Java name for the id
+        // wins (alphabetically first), else the modern fold of a legacy
+        // / Bedrock-only name (`hell` → `nether_wastes`, hills → parent).
+        let mut direct: BTreeMap<i32, String> = BTreeMap::new();
+        let mut folded: BTreeMap<i32, String> = BTreeMap::new();
         for (name, id) in &self.biome_ids {
-            out.entry(*id).or_insert_with(|| name.clone());
+            if crate::biomes::is_java_biome(name) {
+                direct.entry(*id).or_insert_with(|| name.clone());
+            } else if let Some(j) = crate::biomes::to_java(name) {
+                folded.entry(*id).or_insert_with(|| format!("minecraft:{j}"));
+            }
         }
-        out
+        for (id, name) in folded {
+            direct.entry(id).or_insert(name);
+        }
+        direct
+    }
+
+    /// Give every current Java biome a Bedrock id: modern names missing
+    /// from the generated table borrow their legacy twin's id.
+    pub fn add_modern_biome_aliases(&mut self) {
+        for (modern, legacy) in crate::biomes::MODERN_ALIASES {
+            let key = format!("minecraft:{modern}");
+            if self.biome_ids.contains_key(&key) {
+                continue;
+            }
+            if let Some(&id) = self.biome_ids.get(&format!("minecraft:{legacy}")) {
+                self.biome_ids.insert(key, id);
+            }
+        }
     }
 
     /// Map a Bedrock numeric biome id → Java biome name for the reverse
@@ -348,6 +375,33 @@ fn rule_output(rule: &BlockRule, states_dropped: bool) -> MappedBlock {
 pub struct ReverseBlockRules {
     states: BTreeMap<String, BlockState>,
     names: BTreeMap<String, String>,
+    /// Bedrock name → every (Bedrock states, Java state) pair, for the
+    /// best-match fallback when an exact state combo is absent (older
+    /// worlds missing newer states, transient bits).
+    by_name: BTreeMap<String, Vec<StatePair>>,
+}
+
+/// (Bedrock states, Java state) — one forward rule seen from the reverse.
+type StatePair = (Vec<(String, String)>, BlockState);
+
+/// Bedrock-only states that carry no Java meaning and must not block a
+/// match (scheduled-update / transient flags).
+const TRANSIENT_BEDROCK_STATES: [&str; 2] = ["update_bit", "suspended_bit"];
+
+/// Bedrock names that are pure aliases of another Bedrock name for the
+/// reverse direction: Java has a single fluid block with a `level`.
+fn bedrock_alias(name: &str) -> &str {
+    match name {
+        "minecraft:flowing_water" => "minecraft:water",
+        "minecraft:flowing_lava" => "minecraft:lava",
+        other => other,
+    }
+}
+
+/// Values that read as a state's "nothing special" default — the tie
+/// breaker when a query leaves states unspecified.
+fn is_default_like(v: &str) -> bool {
+    matches!(v, "none" | "false" | "0" | "0b" | "straight" | "bottom" | "north" | "lower")
 }
 
 impl ReverseBlockRules {
@@ -362,11 +416,47 @@ impl ReverseBlockRules {
                 rule.states.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             let bedrock_key = state_key(&rule.name, &bedrock_props);
             out.names.entry(rule.name.clone()).or_insert_with(|| java_name.clone());
-            out.states
-                .entry(bedrock_key)
-                .or_insert_with(|| BlockState { name: java_name, properties: java_props });
+            let java = BlockState { name: java_name, properties: java_props };
+            if !out.states.contains_key(&bedrock_key) {
+                out.by_name.entry(rule.name.clone()).or_default().push((bedrock_props, java.clone()));
+            }
+            out.states.entry(bedrock_key).or_insert(java);
         }
         out
+    }
+
+    /// Best candidate for a Bedrock state set with no exact entry: every
+    /// non-transient query state the candidate also has must match;
+    /// maximize matches, then prefer default-like values for the states
+    /// the query does not mention.
+    fn best_match(&self, name: &str, props: &[(String, String)]) -> Option<&BlockState> {
+        let query: Vec<&(String, String)> =
+            props.iter().filter(|(k, _)| !TRANSIENT_BEDROCK_STATES.contains(&k.as_str())).collect();
+        let mut best: Option<(i32, &BlockState)> = None;
+        for (cand, java) in self.by_name.get(name)? {
+            let mut score = 0i32;
+            // A mismatched value costs more than any default bonus can
+            // win back, so exact agreements always rank first; a candidate
+            // with mismatches still beats dropping every property.
+            for (k, v) in &query {
+                match cand.iter().find(|(ck, _)| ck == k) {
+                    Some((_, cv)) if cv == v => score += 100,
+                    Some(_) => score -= 40,
+                    None => {}
+                }
+            }
+            for (ck, cv) in cand {
+                if TRANSIENT_BEDROCK_STATES.contains(&ck.as_str()) {
+                    score += i32::from(is_default_like(cv)) * 2;
+                } else if !query.iter().any(|(k, _)| k == ck) {
+                    score += i32::from(is_default_like(cv));
+                }
+            }
+            if best.is_none_or(|(b, _)| score > b) {
+                best = Some((score, java));
+            }
+        }
+        best.map(|(_, j)| j)
     }
 
     /// Map one Bedrock palette entry. Exact state inverse first, then the
@@ -380,11 +470,23 @@ impl ReverseBlockRules {
         report: &mut ConversionReport,
     ) -> MappedBlock {
         let had_properties = !bedrock.properties.is_empty();
-        let key = state_key(&bedrock.name, &bedrock.properties);
+        let name = bedrock_alias(&bedrock.name);
+        let key = state_key(name, &bedrock.properties);
         if let Some(java) = self.states.get(&key) {
             return MappedBlock { state: java.clone(), states_dropped: false };
         }
-        if let Some(java_name) = self.names.get(&bedrock.name) {
+        if had_properties && let Some(java) = self.best_match(name, &bedrock.properties) {
+            if reported.insert(format!("{}#approx", bedrock.name)) {
+                report.record(
+                    LossKind::ValueCoerced,
+                    format!("block {}", bedrock.name),
+                    "no exact Java state for this Bedrock state set (older-version or transient \
+                     states); mapped to the closest matching state",
+                );
+            }
+            return MappedBlock { state: java.clone(), states_dropped: false };
+        }
+        if let Some(java_name) = self.names.get(name) {
             if had_properties {
                 if reported.insert(bedrock.name.clone()) {
                     report.record(
@@ -445,6 +547,41 @@ mod tests {
             name: name.into(),
             properties: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
         }
+    }
+
+    #[test]
+    fn reverse_fluids_transients_and_partial_states() {
+        let rev = RegistryRules::embedded().reverse();
+        let mut seen = BTreeSet::new();
+        let mut rep = ConversionReport::new();
+        let mut map = |b: BlockState| rev.map_block(&b, &mut seen, &mut rep).state;
+        // flowing_water is not a Java block: it becomes water with a level.
+        let w = map(block("minecraft:flowing_water", &[("liquid_depth", "3")]));
+        assert_eq!(w.name, "minecraft:water");
+        assert_eq!(w.get("level"), Some("3"));
+        assert_eq!(map(block("minecraft:flowing_lava", &[("liquid_depth", "0")])).name, "minecraft:lava");
+        // Transient update_bit must not lose `persistent`.
+        let l = map(block("minecraft:oak_leaves", &[("persistent_bit", "1b"), ("update_bit", "1b")]));
+        assert_eq!(l.name, "minecraft:oak_leaves");
+        assert_eq!(l.get("persistent"), Some("true"));
+        // Old stairs without 1.26's `minecraft:corner` state keep facing/half.
+        let st = map(block("minecraft:oak_stairs", &[("upside_down_bit", "1b"), ("weirdo_direction", "2")]));
+        assert_eq!(st.name, "minecraft:oak_stairs");
+        assert_eq!(st.get("half"), Some("top"));
+        assert_eq!(st.get("shape"), Some("straight"));
+    }
+
+    #[test]
+    fn every_java_biome_maps_and_reverse_is_valid() {
+        let rules = RegistryRules::embedded();
+        for b in crate::biomes::JAVA_BIOMES {
+            assert!(rules.biome_ids.contains_key(&format!("minecraft:{b}")), "no Bedrock id for {b}");
+        }
+        for (id, name) in rules.biome_names() {
+            assert!(crate::biomes::is_java_biome(&name), "id {id} reverses to invalid {name}");
+        }
+        let hell = rules.biome_ids["minecraft:nether_wastes"];
+        assert_eq!(rules.biome_names()[&hell], "minecraft:nether_wastes");
     }
 
     #[test]

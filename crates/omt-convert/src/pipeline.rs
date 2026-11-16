@@ -19,11 +19,10 @@ use std::path::Path;
 use omt_bedrock::BedrockWorld;
 use omt_java::{JavaWorld, RegionWriter, region::RegionFile};
 use omt_nbt::{ByteOrder, Container, Nbt, Tag};
-use omt_world::WorldStore;
 
 use crate::chunk_bedrock::{ChunkConversion, ChunkWrites, java_chunk_to_bedrock};
 use crate::chunk_java::{JavaChunk, parse_java_chunk};
-use crate::chunk_to_java::{BedrockConversion, JavaChunkWrite, bedrock_chunk_to_java};
+use crate::chunk_to_java::{BedrockConversion, JavaChunkWrite};
 use crate::entities::entity_region_root;
 use crate::error::{ConvertError, Result};
 use crate::loss::ConversionReport;
@@ -133,15 +132,30 @@ fn convert_one(
     };
     let parsed: Result<JavaChunk> = parse_java_chunk(&nbt)
         .map_err(|e| ConvertError::Store(format!("parse ({x},{z}): {e}")));
-    let parsed = match parsed {
+    let mut parsed = match parsed {
         Ok(p) => p,
         Err(e) => return ChunkOutcome::Failed { error: e.to_string() },
     };
+    parsed.entities = read_java_entities(java, dim, x, z);
     match java_chunk_to_bedrock(&parsed, dim, &opts.rules, &opts.filter) {
         Ok(ChunkConversion::Converted(writes)) => ChunkOutcome::Converted(Box::new(writes)),
         Ok(ChunkConversion::SkippedProto { report }) => ChunkOutcome::SkippedProto { report },
         Err(e) => ChunkOutcome::Failed { error: e.to_string() },
     }
+}
+
+/// Entities of one chunk from its Java entity region (empty when the
+/// region or chunk is absent — vanilla omits empty entity chunks).
+fn read_java_entities(java: &JavaWorld, dim: u8, x: i32, z: i32) -> Vec<omt_nbt::Tag> {
+    let Some(dir) = java.entity_dimension_dir(dim) else { return Vec::new() };
+    let path = dir.join(format!("r.{}.{}.mca", x.div_euclid(32), z.div_euclid(32)));
+    let Ok(bytes) = std::fs::read(&path) else { return Vec::new() };
+    let Ok(region) = omt_java::RegionFile::from_bytes(&path, &bytes) else { return Vec::new() };
+    region
+        .read_chunk(&bytes, x, z)
+        .ok()
+        .and_then(|n| n.tag.get("Entities").and_then(|t| t.as_list()).map(<[omt_nbt::Tag]>::to_vec))
+        .unwrap_or_default()
 }
 
 /// Apply converted records to a writable Bedrock world: delete the chunk
@@ -155,10 +169,12 @@ pub fn apply_conversions(
 ) -> Result<usize> {
     let writes = std::mem::take(&mut outcome.writes);
     let mut applied = 0usize;
+    // Clear every target column in one database pass (not one per chunk).
+    let columns: std::collections::HashSet<(i32, i32)> = writes.iter().map(|w| (w.x, w.z)).collect();
+    bedrock
+        .delete_columns(dim, &columns)
+        .map_err(|e| ConvertError::Store(format!("clearing target columns: {e}")))?;
     for w in &writes {
-        bedrock
-            .delete_chunk(dim, w.x, w.z)
-            .map_err(|e| ConvertError::Store(format!("clearing ({},{}): {e}", w.x, w.z)))?;
         bedrock
             .raw_put_many(&w.records)
             .map_err(|e| ConvertError::Store(format!("writing ({},{}): {e}", w.x, w.z)))?;
@@ -224,19 +240,27 @@ pub fn convert_bedrock_chunks(
         .map_err(|e| ConvertError::Store(format!("listing Bedrock chunks: {e}")))?;
     let data_version = omt_versions::registry().java_data_version;
 
-    const READ_BATCH: usize = 64;
+    // Reads stay serial (the LevelDB handle is a mutex and parallel
+    // readers convoy); decode + convert — the expensive part — runs on
+    // every core per batch.
+    const READ_BATCH: usize = 256;
+    let reverse = opts.rules.reverse();
     let mut result = JavaDimensionOutcome {
         data_version,
         ..Default::default()
     };
     for batch in coords.chunks(READ_BATCH) {
-        let read: Vec<(i32, i32, BedrockOutcome)> = batch
-            .iter()
-            .map(|&(x, z)| {
-                let outcome = match bedrock.read_chunk_full(dim, x, z) {
-                    Ok(Some(chunk)) => match bedrock_chunk_to_java(
+        let raw: Vec<(i32, i32, omt_world::WorldResult<omt_bedrock::ColumnRecords>)> =
+            batch.iter().map(|&(x, z)| (x, z, bedrock.column_records(dim, x, z))).collect();
+        let read: Vec<(i32, i32, BedrockOutcome)> = raw
+            .into_par_iter()
+            .map(|(x, z, records)| {
+                let decoded = records.and_then(|r| BedrockWorld::decode_column(dim, x, z, &r));
+                let outcome = match decoded {
+                    Ok(Some(chunk)) => match crate::chunk_to_java::bedrock_chunk_to_java_with(
                         &chunk,
                         &opts.rules,
+                        &reverse,
                         &opts.filter,
                         data_version,
                     ) {
@@ -276,9 +300,9 @@ pub fn convert_bedrock_chunks(
 }
 
 /// Apply converted chunks to a Java world folder: scaffold a minimal
-/// `level.dat` when the folder has none, then write/merge region files
-/// (`region/`, per [`omt_java::store::dimension_dir`]) and entity regions
-/// (`entities/`, per [`omt_java::store::entity_dimension_dir`]). Existing chunks
+/// `level.dat` when the folder has none, then write/merge region files and
+/// entity regions under [`omt_java::store::writer_dimension_dir`] (26.3
+/// namespaced layout for new targets, classic kept for classic targets). Existing chunks
 /// of rewritten regions are carried over untouched; existing entity-region
 /// payloads keep their raw bytes. `level_name` is only used for the
 /// scaffold (full `level.dat` field mapping is M4). Consumes the writes;
@@ -312,7 +336,7 @@ pub fn apply_java_conversions(
         // Terrain region: converted payloads + carried-over existing chunks.
         let mut writer = RegionWriter::new();
         merge_existing(
-            &omt_java::store::dimension_dir(java_root, dim).join(format!("r.{rx}.{rz}.mca")),
+            &omt_java::store::writer_dimension_dir(java_root, dim, "region").join(format!("r.{rx}.{rz}.mca")),
             rx,
             rz,
             &converted_keys,
@@ -322,17 +346,17 @@ pub fn apply_java_conversions(
         for w in chunks {
             writer.put(w.x, w.z, w.chunk_nbt.clone(), timestamp);
         }
-        let dir = omt_java::store::dimension_dir(java_root, dim);
+        let dir = omt_java::store::writer_dimension_dir(java_root, dim, "region");
         std::fs::create_dir_all(&dir)
             .map_err(|e| ConvertError::Store(format!("creating {}: {e}", dir.display())))?;
-        std::fs::write(dir.join(format!("r.{rx}.{rz}.mca")), writer.finish())
+        writer.finish_image().write_to(&dir, rx, rz)
             .map_err(|e| ConvertError::Store(format!("writing region r.{rx}.{rz}: {e}")))?;
 
         // Entity region: one root per converted chunk (findings Task C
         // shape; carried opaquely from `read_chunk_full`'s digp walk).
         let mut entities_writer = RegionWriter::new();
         merge_existing(
-            &omt_java::store::entity_dimension_dir(java_root, dim).join(format!("r.{rx}.{rz}.mca")),
+            &omt_java::store::writer_dimension_dir(java_root, dim, "entities").join(format!("r.{rx}.{rz}.mca")),
             rx,
             rz,
             &converted_keys,
@@ -345,10 +369,10 @@ pub fn apply_java_conversions(
                 .map_err(|e| ConvertError::Store(format!("entity root NBT: {e}")))?;
             entities_writer.put(w.x, w.z, raw, timestamp);
         }
-        let edir = omt_java::store::entity_dimension_dir(java_root, dim);
+        let edir = omt_java::store::writer_dimension_dir(java_root, dim, "entities");
         std::fs::create_dir_all(&edir)
             .map_err(|e| ConvertError::Store(format!("creating {}: {e}", edir.display())))?;
-        std::fs::write(edir.join(format!("r.{rx}.{rz}.mca")), entities_writer.finish())
+        entities_writer.finish_image().write_to(&edir, rx, rz)
             .map_err(|e| ConvertError::Store(format!("writing entities r.{rx}.{rz}: {e}")))?;
     }
     Ok(writes.len())

@@ -72,6 +72,20 @@ pub fn entity_dimension_dir(root: &Path, dim: u8) -> PathBuf {
     }
 }
 
+/// Where a **writer** puts a dimension's `kind` folder (`region`,
+/// `entities`, `poi`). New target folders get the current 26.3 namespaced
+/// layout (`dimensions/minecraft/<dim>/<kind>`) — OMT stamps the current
+/// DataVersion, and a world claiming 26.3 must look like one. Existing
+/// classic-layout targets (root `region/` or `DIM-1/` present) keep their
+/// layout so merges never split a world across both shapes.
+pub fn writer_dimension_dir(root: &Path, dim: u8, kind: &str) -> PathBuf {
+    let classic = root.join("region").is_dir() || root.join("DIM-1").is_dir() || root.join("DIM1").is_dir();
+    match (classic, JavaLayout::dim_dir_name(dim)) {
+        (false, Some(name)) => root.join("dimensions").join("minecraft").join(name).join(kind),
+        _ => entity_or_region_classic(root, dim, kind),
+    }
+}
+
 /// Java save-folder layout era. 26.3 (DataVersion 5023) moved every
 /// dimension under `dimensions/minecraft/<dim>/{region,entities,poi,data}`
 /// and players to `players/{data,stats,advancements}`; 1.18–1.25 worlds use
@@ -263,7 +277,7 @@ impl JavaWorld {
 
     /// Player-data directory across layout eras: `players/data` when present
     /// (26.3+), else classic `playerdata`.
-    fn players_dir(&self) -> PathBuf {
+    pub fn players_dir(&self) -> PathBuf {
         let modern = self.root.join("players").join("data");
         if modern.is_dir() {
             modern

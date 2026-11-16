@@ -87,25 +87,34 @@ pub fn java_chunk_to_bedrock(
         2i32.to_le_bytes().to_vec(),
     ));
 
-    // Block entities: LE NBT roots, passed through untranslated.
-    if !java.block_entities.is_empty() {
+    // Entities → Bedrock actors: `actorprefix`+id records plus the chunk's
+    // `digp` index (entity_convert.rs; key layout probe-verified).
+    if !java.entities.is_empty() {
+        let items = crate::items::ItemConvertOpts { enchant_ids: rules.enchant_id_map(), ..Default::default() };
+        let mut digp = Vec::new();
+        for e in &java.entities {
+            let Some((actor, uid)) = crate::entity_convert::java_to_bedrock(e, &items, &mut report) else { continue };
+            let suffix = crate::entity_convert::actor_key_suffix(uid);
+            records.push((keys::actor_key(suffix), le_root(&actor)?));
+            digp.extend_from_slice(&suffix);
+        }
+        if !digp.is_empty() {
+            records.push((keys::digp_key(java.x, java.z, dim), digp));
+        }
+    }
+
+    // Block entities: translated per tile (block_entities.rs), plus tiles
+    // Bedrock needs for data Java keeps in the block (flower pots).
+    let tiles = java_tiles_to_bedrock(java, rules, &mut report);
+    if !tiles.is_empty() {
         let mut blob = Vec::new();
-        for be in &java.block_entities {
+        for be in &tiles {
             blob.extend_from_slice(&le_root(be)?);
         }
         records.push((
             keys::chunk_record(java.x, java.z, dim, tag::BLOCK_ENTITIES),
             blob,
         ));
-        report.record(
-            LossKind::UnsupportedComponent,
-            "block_entities",
-            format!(
-                "{} block entities passed through untranslated; field-level \
-                 Java⇄Bedrock tile mapping arrives with the registry",
-                java.block_entities.len()
-            ),
-        );
     }
 
     // Deferred surfaces, each recorded once per chunk.
@@ -318,6 +327,64 @@ pub fn le_root(tag: &Tag) -> Result<Vec<u8>, crate::error::ConvertError> {
             field: "block_entities",
             detail: format!("NBT re-encode failed: {e}"),
         })
+}
+
+/// Java block at absolute coordinates inside this chunk (YZX sections).
+fn java_block_at(java: &JavaChunk, x: i32, y: i32, z: i32) -> Option<&BlockState> {
+    let sec = java.sections.get(&(y.div_euclid(16) as i8))?;
+    let i = (y.rem_euclid(16) as usize) * 256 + (z.rem_euclid(16) as usize) * 16 + x.rem_euclid(16) as usize;
+    sec.palette.get(*sec.indices.get(i)? as usize)
+}
+
+fn java_tiles_to_bedrock(java: &JavaChunk, rules: &RegistryRules, report: &mut ConversionReport) -> Vec<Tag> {
+    let items = crate::items::ItemConvertOpts { enchant_ids: rules.enchant_id_map(), ..Default::default() };
+    let block_at = |x: i32, y: i32, z: i32| java_block_at(java, x, y, z).map(|b| b.name.clone());
+    let mut tiles = Vec::new();
+    {
+        let mut ctx = crate::block_entities::BeCtx { items: &items, block_at: &block_at, report: &mut *report };
+        for be in &java.block_entities {
+            let Some(mut tile) = crate::block_entities::java_to_bedrock(be, &mut ctx) else { continue };
+            if tile.get("id").and_then(Tag::as_str) == Some("Skull")
+                && let (Some(x), Some(y), Some(z)) = (be.get("x").and_then(Tag::as_i64), be.get("y").and_then(Tag::as_i64), be.get("z").and_then(Tag::as_i64))
+                && let Some(block) = java_block_at(java, x as i32, y as i32, z as i32)
+                && let Tag::Compound(c) = &mut tile
+            {
+                c.extend(crate::block_entities::bedrock_skull_fields(&block.name, block.get("rotation")));
+            }
+            tiles.push(tile);
+        }
+    }
+    // Flower pots: Java `potted_*` blocks have no tile; Bedrock needs one.
+    let mut pots = Vec::new();
+    for (sy, sec) in &java.sections {
+        for (pi, state) in sec.palette.iter().enumerate() {
+            if !state.name.starts_with("minecraft:potted_") {
+                continue;
+            }
+            for (i, &ix) in sec.indices.iter().enumerate() {
+                if ix as usize == pi {
+                    let (ly, lz, lx) = ((i / 256) as i32, ((i / 16) % 16) as i32, (i % 16) as i32);
+                    pots.push(((java.x * 16 + lx, *sy as i32 * 16 + ly, java.z * 16 + lz), state.name.clone()));
+                }
+            }
+        }
+    }
+    if !pots.is_empty() {
+        let plant_state = |name: &str| -> Option<(String, Vec<(String, Tag)>)> {
+            let mut seen = std::collections::BTreeSet::new();
+            let mut rep = ConversionReport::new();
+            let mapped = rules.map_block(&BlockState { name: name.to_string(), properties: Vec::new() }, &mut seen, &mut rep);
+            let states = mapped
+                .state
+                .properties
+                .iter()
+                .map(|(k, v)| (k.clone(), omt_nbt::snbt::from_snbt(v).unwrap_or_else(|_| Tag::String(v.clone()))))
+                .collect();
+            Some((mapped.state.name, states))
+        };
+        tiles.extend(crate::block_entities::bedrock_tiles_from_blocks(&pots, &plant_state, rules.block_palette_version));
+    }
+    tiles
 }
 
 #[cfg(test)]

@@ -27,6 +27,13 @@ pub use error::{Error, Result};
 pub use level_dat::BedrockLevelDat;
 pub use tag::{ByteOrder, Nbt, Tag, TagId};
 
+/// Element type bytes of **empty lists**, keyed by an internal path (segments
+/// joined with `\u{1f}`), captured by [`read_prefix_with_hints`] and honored
+/// by [`write_with_list_hints`] so a no-op parse→serialize reproduces the
+/// original bytes (vanilla writes empty lists with their true element type;
+/// the in-memory `Tag::List` cannot carry it).
+pub type ListHints = std::collections::BTreeMap<String, u8>;
+
 /// Read one NBT root (id + name + payload) from `buf` using `order`.
 ///
 /// Errors with [`Error::TrailingData`] when bytes remain after the root tag;
@@ -43,6 +50,13 @@ pub fn read(buf: &[u8], order: ByteOrder) -> Result<Nbt> {
 /// payloads are followed by other chunks' data, so this is the normal entry
 /// point for fragmented streams.
 pub fn read_prefix(buf: &[u8], order: ByteOrder) -> Result<(Nbt, usize)> {
+    let (nbt, used, _) = read_prefix_with_hints(buf, order)?;
+    Ok((nbt, used))
+}
+
+/// [`read_prefix`] plus capture of empty-list element types (see [`ListHints`]).
+/// Pair with [`write_with_list_hints`] for byte-faithful no-op round trips.
+pub fn read_prefix_with_hints(buf: &[u8], order: ByteOrder) -> Result<(Nbt, usize, ListHints)> {
     let mut r = Reader::new(buf, order);
     let id = r.u8()?;
     if id == 0 {
@@ -51,7 +65,20 @@ pub fn read_prefix(buf: &[u8], order: ByteOrder) -> Result<(Nbt, usize)> {
     let tag_id = TagId::from_id(id).ok_or(Error::InvalidTagId(id))?;
     let name = r.string()?;
     let tag = r.payload(tag_id, 1)?;
-    Ok((Nbt { name, tag }, r.pos))
+    Ok((Nbt { name, tag }, r.pos, r.empty_lists.drain(..).collect()))
+}
+
+/// Serialize an NBT root, preserving empty lists' declared element types from
+/// `hints` (captured by [`read_prefix_with_hints`]). Paths not in `hints`
+/// encode as type `0` (undefined) — semantically valid, just not byte-identical.
+pub fn write_with_list_hints(nbt: &Nbt, order: ByteOrder, hints: &ListHints) -> Result<Vec<u8>> {
+    validate::payload(&nbt.tag, order)?;
+    let mut out = Vec::with_capacity(256);
+    out.push(nbt.tag.id());
+    write::push_string(&mut out, &nbt.name, order);
+    let mut path = Vec::new();
+    write::push_payload_hints(&mut out, &nbt.tag, order, &mut path, hints);
+    Ok(out)
 }
 
 /// Serialize an NBT root (id byte + name + payload).
@@ -59,12 +86,7 @@ pub fn read_prefix(buf: &[u8], order: ByteOrder) -> Result<(Nbt, usize)> {
 /// Fails on in-memory trees that cannot be encoded faithfully: heterogeneous
 /// lists, and strings whose modified-UTF-8 encoding exceeds 65,535 bytes.
 pub fn write(nbt: &Nbt, order: ByteOrder) -> Result<Vec<u8>> {
-    validate::payload(&nbt.tag)?;
-    let mut out = Vec::with_capacity(256);
-    out.push(nbt.tag.id());
-    write::push_string(&mut out, &nbt.name, order);
-    write::push_payload(&mut out, &nbt.tag, order);
-    Ok(out)
+    write_with_list_hints(nbt, order, &ListHints::new())
 }
 
 pub(crate) const MAX_DEPTH: u16 = 512;
@@ -74,11 +96,11 @@ pub(crate) const MAX_DEPTH: u16 = 512;
 mod validate {
     use super::{string, Error, Result, Tag};
 
-    pub(super) fn payload(tag: &Tag) -> Result<()> {
+    pub(super) fn payload(tag: &Tag, order: super::ByteOrder) -> Result<()> {
         match tag {
             Tag::String(v) => {
-                if string::encoded_len(v) > u16::MAX as usize {
-                    return Err(Error::StringTooLong(string::encoded_len(v)));
+                if string::encoded_len(v, order) > u16::MAX as usize {
+                    return Err(Error::StringTooLong(string::encoded_len(v, order)));
                 }
                 Ok(())
             }
@@ -92,16 +114,16 @@ mod validate {
                     }
                 }
                 for item in items {
-                    payload(item)?;
+                    payload(item, order)?;
                 }
                 Ok(())
             }
             Tag::Compound(entries) => {
                 for (name, child) in entries {
-                    if string::encoded_len(name) > u16::MAX as usize {
-                        return Err(Error::StringTooLong(string::encoded_len(name)));
+                    if string::encoded_len(name, order) > u16::MAX as usize {
+                        return Err(Error::StringTooLong(string::encoded_len(name, order)));
                     }
-                    payload(child)?;
+                    payload(child, order)?;
                 }
                 Ok(())
             }
@@ -110,6 +132,12 @@ mod validate {
     }
 }
 
+/// Element type bytes of **empty lists**, keyed by an internal path (segments
+/// joined with `\u{1f}`), captured by [`read_prefix_with_hints`] and honored
+/// by [`write_with_list_hints`] so a no-op parse→serialize reproduces the
+/// original bytes (vanilla writes empty lists with their true element type;
+/// the in-memory `Tag::List` cannot carry it).
+///
 /// Streaming reader over a byte slice. Public so sibling crates can parse
 /// embedded NBT-ish structures (Bedrock subchunk palettes, actor payloads)
 /// that do not start with a full NBT root header.
@@ -117,17 +145,20 @@ pub struct Reader<'a> {
     buf: &'a [u8],
     pub(crate) pos: usize,
     le: bool,
+    /// Path segments of the tag currently being parsed + empty lists found.
+    path: Vec<String>,
+    pub(crate) empty_lists: Vec<(String, u8)>,
 }
 
 impl<'a> Reader<'a> {
     pub(crate) fn new(buf: &'a [u8], order: ByteOrder) -> Self {
-        Self { buf, pos: 0, le: order == ByteOrder::Little }
+        Self { buf, pos: 0, le: order == ByteOrder::Little, path: Vec::new(), empty_lists: Vec::new() }
     }
 
     /// Construct a reader positioned at `offset` (for payload-follows-prefix
     /// formats such as Anvil chunk bodies).
     pub fn with_offset(buf: &'a [u8], order: ByteOrder, offset: usize) -> Self {
-        Self { buf, pos: offset.min(buf.len()), le: order == ByteOrder::Little }
+        Self { buf, pos: offset.min(buf.len()), le: order == ByteOrder::Little, path: Vec::new(), empty_lists: Vec::new() }
     }
 
     /// Bytes consumed so far.
@@ -194,7 +225,8 @@ impl<'a> Reader<'a> {
             return Err(Error::AbsurdLength { what: "string", len: len as u64, available: self.remaining() });
         }
         let bytes = self.take(len)?;
-        Ok(string::decode_modified_utf8(bytes))
+        let order = if self.le { ByteOrder::Little } else { ByteOrder::Big };
+        Ok(string::decode(bytes, order))
     }
 
     fn check_count(&self, what: &'static str, count: u64, min_elem_bytes: u64) -> Result<usize> {
@@ -225,20 +257,30 @@ impl<'a> Reader<'a> {
             TagId::List => {
                 let elem_raw = self.u8()?;
                 let count = self.u32()? as u64;
-                if elem_raw == 0 {
-                    // End-typed lists must be empty; anything else is malformed.
-                    if count != 0 {
-                        return Err(Error::InvalidTagId(0));
+                if count == 0 {
+                    // Remember the declared element type so a re-encode is
+                    // byte-identical (vanilla writes the true type even for
+                    // empty lists; `Tag::List` cannot carry it).
+                    self.empty_lists.push((self.path.join("\u{1f}"), elem_raw));
+                    if elem_raw != 0 {
+                        let _ = TagId::from_id(elem_raw).ok_or(Error::InvalidTagId(elem_raw))?;
                     }
                     Tag::List(Vec::new())
                 } else {
+                    if elem_raw == 0 {
+                        // End-typed lists must be empty; anything else is malformed.
+                        return Err(Error::InvalidTagId(0));
+                    }
                     let elem = TagId::from_id(elem_raw).ok_or(Error::InvalidTagId(elem_raw))?;
                     // Smallest possible payload is 1 byte; this guards against
                     // hostile counts trying to allocate gigabytes.
                     let n = self.check_count("list", count, 1)?;
                     let mut v = Vec::with_capacity(n.min(4096));
-                    for _ in 0..n {
-                        v.push(self.payload(elem, depth + 1)?);
+                    for i in 0..n {
+                        self.path.push(i.to_string());
+                        let item = self.payload(elem, depth + 1)?;
+                        self.path.pop();
+                        v.push(item);
                     }
                     Tag::List(v)
                 }
@@ -252,7 +294,9 @@ impl<'a> Reader<'a> {
                     }
                     let tid = TagId::from_id(id).ok_or(Error::InvalidTagId(id))?;
                     let name = self.string()?;
+                    self.path.push(name.clone());
                     let tag = self.payload(tid, depth + 1)?;
+                    self.path.pop();
                     entries.push((name, tag));
                 }
                 Tag::Compound(entries)
@@ -280,7 +324,7 @@ impl<'a> Reader<'a> {
 }
 
 pub mod write {
-    use super::{string, ByteOrder, Tag};
+    use super::{string, ByteOrder, Tag, ListHints};
 
     /// Public wrapper: append a payload (no tag id / name).
     pub fn push_payload_pub(out: &mut Vec<u8>, tag: &Tag, ) {
@@ -298,7 +342,7 @@ pub mod write {
         let start = out.len();
         out.extend_from_slice(&[0, 0]); // length placeholder
         let len_start = out.len();
-        string::encode_modified_utf8(s, out);
+        string::encode(s, order, out);
         let len = out.len() - len_start;
         debug_assert!(len <= u16::MAX as usize, "validate::payload must run first");
         let bytes = (len as u16).to_bytes(order);
@@ -307,6 +351,19 @@ pub mod write {
     }
 
     pub(super) fn push_payload(out: &mut Vec<u8>, tag: &Tag, order: ByteOrder) {
+        let mut path = Vec::new();
+        push_payload_hints(out, tag, order, &mut path, &ListHints::new());
+    }
+
+    /// Path-aware payload writer; empty lists take their declared element
+    /// type from `hints` when present (byte-faithful no-op saves).
+    pub(super) fn push_payload_hints(
+        out: &mut Vec<u8>,
+        tag: &Tag,
+        order: ByteOrder,
+        path: &mut Vec<String>,
+        hints: &ListHints,
+    ) {
         match tag {
             Tag::Byte(v) => out.push(*v as u8),
             Tag::Short(v) => out.extend_from_slice(&order.arr2(*v as u16)),
@@ -324,18 +381,22 @@ pub mod write {
             Tag::List(items) => {
                 match items.first() {
                     Some(first) => out.push(first.id()),
-                    None => out.push(0),
+                    None => out.push(hints.get(&path.join("\u{1f}")).copied().unwrap_or(0)),
                 }
                 out.extend_from_slice(&order.arr4(items.len() as u32));
-                for item in items {
-                    push_payload(out, item, order);
+                for (i, item) in items.iter().enumerate() {
+                    path.push(i.to_string());
+                    push_payload_hints(out, item, order, path, hints);
+                    path.pop();
                 }
             }
             Tag::Compound(entries) => {
                 for (name, child) in entries {
                     out.push(child.id());
                     push_string(out, name, order);
-                    push_payload(out, child, order);
+                    path.push(name.clone());
+                    push_payload_hints(out, child, order, path, hints);
+                    path.pop();
                 }
                 out.push(0);
             }

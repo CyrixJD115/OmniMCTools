@@ -437,7 +437,8 @@ fn write_state_value(out: &mut Vec<u8>, key: &str, value: &str) {
 
 fn push_len_prefixed(out: &mut Vec<u8>, s: &str) {
     let mut buf = Vec::with_capacity(s.len());
-    omt_nbt::string::encode_modified_utf8(s, &mut buf);
+    // Palette strings are Bedrock NBT: plain UTF-8 (see `omt_nbt::string`).
+    omt_nbt::string::encode(s, omt_nbt::ByteOrder::Little, &mut buf);
     out.extend_from_slice(&(buf.len() as u16).to_le_bytes());
     out.extend_from_slice(&buf);
 }

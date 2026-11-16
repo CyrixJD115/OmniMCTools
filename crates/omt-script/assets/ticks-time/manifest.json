@@ -1,0 +1,6 @@
+{
+  "name": "Tick Clock",
+  "version": "1.0.0",
+  "author": "OmniMCTools",
+  "description": "OMT example extension: shows tick counters (Time, DayTime, InhabitedTime) as in-game days and clock time next to the raw value."
+}
