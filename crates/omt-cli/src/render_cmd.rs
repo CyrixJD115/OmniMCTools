@@ -27,9 +27,12 @@ pub struct Args {
     no_tint: bool,
 }
 
+/// A read-only store plus the workspace guard of an extracted archive.
+pub type OpenedStore = (Box<dyn WorldStore + Sync>, Option<Workspace>);
+
 /// Open any world read-only as a store. Archives are extracted into a
 /// temporary workspace that the returned guard deletes on drop.
-pub fn open_store(path: &std::path::Path) -> Result<(Box<dyn WorldStore + Sync>, Option<Workspace>), Box<dyn std::error::Error>> {
+pub fn open_store(path: &std::path::Path) -> Result<OpenedStore, Box<dyn std::error::Error>> {
     let (root, ws) = if workspace::is_archive(path) {
         let ws = Workspace::open(path, &workspace::default_base())?;
         (ws.root().to_path_buf(), Some(ws))
