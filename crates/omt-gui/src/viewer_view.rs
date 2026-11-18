@@ -135,7 +135,11 @@ impl ViewerState {
         let side = Side::Left;
         let slime_tip = if !self.bedrock && self.seed.is_none() { "Slime chunks (seed unknown)" } else { "Slime chunks" };
         let tex_tip = if crate::textures::current().is_some() { "Block textures when zoomed in" } else { "Block textures (no pack — see Settings)" };
+        let inspecting = p.panel() == Some(PanelTab::Inspect);
+        let inspect_msg = ViewerMsg::Panel(if inspecting { Some(PanelTab::View) } else { Some(PanelTab::Inspect) });
         let mut top: Vec<Element<'_, ViewerMsg>> = vec![
+            maprail::tool(Glyph::Cube, "Chunk selection (inspector): click a chunk", inspecting, Some(inspect_msg), side),
+            maprail::separator(),
             maprail::tool(Glyph::Player, "Player markers", p.players, Some(ViewerMsg::Layer(Layer::Players, !p.players)), side),
             maprail::tool(Glyph::Bookmark, "Bookmarks", p.bookmarks, Some(ViewerMsg::Layer(Layer::Bookmarks, !p.bookmarks)), side),
             maprail::tool(Glyph::Entity, format!("Entities ({})", self.entities.len()), p.entities, Some(ViewerMsg::Layer(Layer::Entities, !p.entities)), side),
@@ -440,8 +444,11 @@ impl ViewerState {
                     markers.push(Marker { x: pl.x, z: pl.z, label: pl.label.clone(), icon: Some(icon_handle(Icon::Player)), color: style::t().warn });
                 }
             } else {
+                // Crowded servers: names only once zoomed in (icons always).
+                let crowd = self.ext.players.iter().filter(|pl| pl.dim == self.ctl.dim).count() > 30 && self.ctl.camera.zoom < 2.0;
                 for pl in self.ext.players.iter().filter(|pl| pl.dim == self.ctl.dim) {
-                    markers.push(Marker { x: pl.x, z: pl.z, label: pl.label(), icon: Some(icon_handle(Icon::Player)), color: style::t().warn });
+                    let label = if crowd { String::new() } else { pl.label() };
+                    markers.push(Marker { x: pl.x, z: pl.z, label, icon: Some(icon_handle(Icon::Player)), color: style::t().warn });
                 }
             }
         }

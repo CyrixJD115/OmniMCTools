@@ -310,6 +310,10 @@ pub fn legend_tab<'a, M: Clone + 'a>(which: Lists, items: &'a [(String, usize, [
     let (ph, what) = if which == Lists::Biomes { ("Search biomes", "biomes") } else { ("Search blocks", "surface blocks") };
     let o = on.clone();
     let mut col = column![search(ph, st.query(which), move |s| o(ListMsg::Search(which, s))), note(format!("{} {what} in the loaded map — click to highlight", items.len()))].spacing(6);
+    if which == Lists::Blocks && !items.is_empty() {
+        let all = items.iter().map(|(n, _, c)| format!("{n} = {}", panelui::hex(*c))).collect::<Vec<_>>().join("\n");
+        col = col.push(panelui::action("Copy all names and colors", Some(on(ListMsg::Copy(all)))));
+    }
     for (name, n, rgb) in items.iter().filter(|(n, _, _)| hit(st.query(which), n)).take(300) {
         let msg = if which == Lists::Biomes { ListMsg::HighlightBiome(name.clone()) } else { ListMsg::HighlightBlock(name.clone()) };
         let line = row![
