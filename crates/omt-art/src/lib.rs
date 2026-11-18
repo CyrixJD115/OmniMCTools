@@ -12,6 +12,7 @@ pub mod font;
 pub mod icons;
 pub mod image;
 pub mod landscape;
+mod map_glyphs;
 
 pub use blocks::{BlockFaces, Material, iso_block, texture};
 pub use font::{TitleStyle, pixel_text, text_width, title};

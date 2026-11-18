@@ -26,3 +26,15 @@ fn icons_render() {
         assert!(img.coverage() > 0.05, "{g:?}");
     }
 }
+
+#[test]
+fn map_glyph_grids_are_16x16() {
+    for g in Glyph::ALL {
+        if let Some(rows) = crate::map_glyphs::art(g) {
+            for row in rows {
+                assert_eq!(row.chars().count(), 16, "{g:?}: {row}");
+                assert!(row.chars().all(|c| c == '.' || c == '#'), "{g:?}: {row}");
+            }
+        }
+    }
+}

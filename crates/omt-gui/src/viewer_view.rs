@@ -65,12 +65,12 @@ impl ViewerState {
         .width(112);
         let styles = pick_list(MapStyle::ALL.to_vec(), Some(self.prefs.style.style), ViewerMsg::Style).text_size(12).width(136);
         let spawn_btn = |s: Option<(i32, i32)>| {
-            button(assets::icon(Icon::Spawn, 15.0))
-                .padding(6)
+            button(assets::glyph(Glyph::Spawn, style::fg(), 16.0))
+                .padding(5)
                 .on_press_maybe(s.filter(|_| self.ctl.dim == 0).map(|_| ViewerMsg::GotoSpawn))
                 .style(style::button_style(Btn::Standard))
         };
-        let player_btn = button(assets::icon(Icon::Player, 15.0)).padding(6).on_press(ViewerMsg::GotoPlayer).style(style::button_style(Btn::Standard));
+        let player_btn = button(assets::glyph(Glyph::Player, style::fg(), 16.0)).padding(5).on_press(ViewerMsg::GotoPlayer).style(style::button_style(Btn::Standard));
         let goto_row = row![
             text_input("X", &self.goto.0).on_input(ViewerMsg::GotoX).on_submit(ViewerMsg::Goto).size(12).width(74).style(style::input()),
             text_input("Z", &self.goto.1).on_input(ViewerMsg::GotoZ).on_submit(ViewerMsg::Goto).size(12).width(74).style(style::input()),
@@ -126,89 +126,57 @@ impl ViewerState {
     }
 
     // ---------------------------------------------------------- tool rail
+    /// Photoshop-style rail — same anatomy as the Pruner's (`maprail`):
+    /// the viewer's own markers and render modes, then the shared map
+    /// overlays, with zoom/fit pinned at the bottom.
     fn tool_rail(&self) -> Element<'_, ViewerMsg> {
+        use crate::maprail::{self, Side};
         let p = &self.prefs;
-        let chunk_on = p.chunk_grid == Some(true);
-        let right = tooltip::Position::Right;
-        let pins = [
-            (Icon::Spawn, "World spawn pin", p.spawn, ViewerMsg::Layer(Layer::Spawn, !p.spawn)),
-            (Icon::Player, "Player markers", p.players, ViewerMsg::Layer(Layer::Players, !p.players)),
-            (Icon::Bookmark, "Bookmarks", p.bookmarks, ViewerMsg::Layer(Layer::Bookmarks, !p.bookmarks)),
+        let side = Side::Left;
+        let slime_tip = if !self.bedrock && self.seed.is_none() { "Slime chunks (seed unknown)" } else { "Slime chunks" };
+        let tex_tip = if crate::textures::current().is_some() { "Block textures when zoomed in" } else { "Block textures (no pack — see Settings)" };
+        let mut top: Vec<Element<'_, ViewerMsg>> = vec![
+            maprail::tool(Glyph::Player, "Player markers", p.players, Some(ViewerMsg::Layer(Layer::Players, !p.players)), side),
+            maprail::tool(Glyph::Bookmark, "Bookmarks", p.bookmarks, Some(ViewerMsg::Layer(Layer::Bookmarks, !p.bookmarks)), side),
+            maprail::tool(Glyph::Entity, format!("Entities ({})", self.entities.len()), p.entities, Some(ViewerMsg::Layer(Layer::Entities, !p.entities)), side),
+            maprail::tool(Glyph::Slime, slime_tip, p.slime, Some(ViewerMsg::Layer(Layer::Slime, !p.slime)), side),
+            maprail::separator(),
+            maprail::tool(Glyph::Cave, "Underground (caves)", self.cave, Some(ViewerMsg::Cave(!self.cave)), side),
+            maprail::tool(Glyph::Slicer, "Slicer (hide blocks above Y)", self.slicer.is_some(), Some(ViewerMsg::Slicer(self.slicer.is_none())), side),
+            maprail::tool(Glyph::Texture, tex_tip, p.textured, Some(ViewerMsg::Layer(Layer::Textures, !p.textured)), side),
+            maprail::separator(),
         ];
-        let mut col: Vec<Element<'_, ViewerMsg>> = vec![
-            crate::maprail::button(crate::maprail::glyph("+"), "Zoom in", false, ViewerMsg::Zoom(2.0), right),
-            crate::maprail::button(crate::maprail::glyph("−"), "Zoom out", false, ViewerMsg::Zoom(0.5), right),
-            crate::maprail::button(crate::maprail::glyph("⛶"), "Fit world", false, ViewerMsg::Fit, right),
-            crate::maprail::separator(),
-        ];
-        for (icon, t, on, msg) in pins {
-            col.push(crate::maprail::button(assets::icon(icon, 15.0), t, on, msg, right));
-        }
-        col.push(crate::maprail::button(
-            crate::maprail::letter("E"),
-            format!("Entities ({})", self.entities.len()),
-            p.entities,
-            ViewerMsg::Layer(Layer::Entities, !p.entities),
-            right,
-        ));
-        col.push(crate::maprail::separator());
-        col.push(crate::maprail::button(
-            assets::glyph(Glyph::Grid, style::fg(), 13.0),
-            match p.chunk_grid {
-                None => "Chunk grid: auto (Ctrl+G)",
-                Some(true) => "Chunk grid: on (Ctrl+G)",
-                Some(false) => "Chunk grid: off (Ctrl+G)",
-            },
-            chunk_on,
-            ViewerMsg::CycleChunkGrid,
-            right,
-        ));
-        col.push(crate::maprail::button(crate::maprail::glyph("⊞"), "Region grid (32×32 chunks)", p.region_grid, ViewerMsg::Layer(Layer::RegionGrid, !p.region_grid), right));
-        col.push(crate::maprail::button(
-            crate::maprail::letter("S"),
-            if !self.bedrock && self.seed.is_none() { "Slime chunks (seed unknown)" } else { "Slime chunks" },
-            p.slime,
-            ViewerMsg::Layer(Layer::Slime, !p.slime),
-            right,
-        ));
-        col.push(crate::maprail::separator());
-        col.push(crate::maprail::button(crate::maprail::letter("C"), "Underground (caves)", self.cave, ViewerMsg::Cave(!self.cave), right));
-        col.push(crate::maprail::button(crate::maprail::letter("X"), "Slicer (hide blocks above Y)", self.slicer.is_some(), ViewerMsg::Slicer(self.slicer.is_none()), right));
-        col.push(crate::maprail::button(
-            crate::maprail::letter("T"),
-            if crate::textures::current().is_some() { "Block textures when zoomed in" } else { "Block textures (no pack — see Settings)" },
-            p.textured,
-            ViewerMsg::Layer(Layer::Textures, !p.textured),
-            right,
-        ));
-        col.push(crate::maprail::button(crate::maprail::glyph("✛"), "Scale bar & compass", p.hud, ViewerMsg::Layer(Layer::Hud, !p.hud), right));
-        crate::maprail::strip(col)
+        top.extend(maprail::overlay_group(maprail::Overlays {
+            chunk_grid: p.chunk_grid,
+            region_grid: p.region_grid,
+            spawn: p.spawn,
+            spawn_available: self.ctl.dim == 0,
+            hud: p.hud,
+            shortcuts: true,
+            cycle_chunk_grid: ViewerMsg::CycleChunkGrid,
+            toggle_region_grid: ViewerMsg::Layer(Layer::RegionGrid, !p.region_grid),
+            toggle_spawn: ViewerMsg::Layer(Layer::Spawn, !p.spawn),
+            toggle_hud: ViewerMsg::Layer(Layer::Hud, !p.hud),
+        }));
+        let bottom = maprail::nav_group(ViewerMsg::Zoom(2.0), ViewerMsg::Zoom(0.5), ViewerMsg::Fit, true);
+        maprail::strip(top, bottom)
     }
 
     // -------------------------------------------------------- side panel
+    /// The panel's icon strip (right-docked, tooltips open left); the
+    /// collapse chevron is pinned to the bottom like the rail's nav group.
     fn panel_tab_strip(&self) -> Element<'_, ViewerMsg> {
-        let left = tooltip::Position::Left;
-        let mut col: Vec<Element<'_, ViewerMsg>> = PanelTab::ALL
+        use crate::maprail::{self, Side};
+        let top: Vec<Element<'_, ViewerMsg>> = PanelTab::ALL
             .iter()
-            .map(|&tab| {
-                let on = self.prefs.panel() == Some(tab);
-                crate::maprail::button(assets::icon(tab.icon(), 15.0), tab.name(), on, ViewerMsg::Panel(Some(tab)), left)
-            })
+            .map(|&tab| maprail::tool(tab.glyph(), tab.name(), self.prefs.panel() == Some(tab), Some(ViewerMsg::Panel(Some(tab))), Side::Right))
             .collect();
         let (glyph, tip_label, msg) = if self.prefs.panel().is_some() {
             (Glyph::ChevronRight, "Collapse panel", ViewerMsg::Panel(None))
         } else {
             (Glyph::ChevronLeft, "Expand panel", ViewerMsg::Panel(Some(PanelTab::View)))
         };
-        col.push(crate::maprail::separator());
-        col.push(crate::maprail::button(assets::glyph(glyph, style::fg(), 13.0), tip_label, false, msg, left));
-        container(column(col).spacing(2).width(32).align_x(Alignment::Center))
-            .padding([4, 0])
-            .width(38)
-            .height(Length::Fill)
-            .align_x(Alignment::Center)
-            .style(style::rail())
-            .into()
+        maprail::strip(top, vec![maprail::tool(glyph, tip_label, false, Some(msg), Side::Right)])
     }
 
     fn panel<'a>(&'a self, bookmarks: &'a [Bookmark]) -> Element<'a, ViewerMsg> {

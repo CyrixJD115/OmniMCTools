@@ -307,6 +307,10 @@ pub enum Btn {
     ChipOn,
     /// A clickable card (world tiles, tool cards).
     Card,
+    /// Map tool-rail button (square, quiet until hovered).
+    Rail,
+    /// Map tool-rail button, active tool / layer on.
+    RailOn,
 }
 
 fn lip(fill: Color, hover: Color, lip: Color, status: button::Status, radius: f32) -> button::Style {
@@ -327,6 +331,9 @@ fn lip(fill: Color, hover: Color, lip: Color, status: button::Status, radius: f3
 pub fn button_style(kind: Btn) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_theme, status| {
         let k = t();
+        if matches!(status, button::Status::Disabled) && matches!(kind, Btn::Rail | Btn::RailOn) {
+            return button::Style { text_color: k.hint, border: border::rounded(5), ..Default::default() };
+        }
         if matches!(status, button::Status::Disabled) && !matches!(kind, Btn::Ghost | Btn::Nav | Btn::NavActive) {
             return button::Style {
                 background: Some(Background::Color(k.surface)),
@@ -385,6 +392,18 @@ pub fn button_style(kind: Btn) -> impl Fn(&Theme, button::Status) -> button::Sty
                 border: border::rounded(8).color(if hovered { k.border_hi } else { k.border }).width(1),
                 shadow: Shadow { color: Color::BLACK.scale_alpha(if hovered { 0.45 } else { 0.25 }), offset: Vector::new(0.0, if hovered { 6.0 } else { 2.0 }), blur_radius: if hovered { 16.0 } else { 6.0 } },
                 snap: true,
+            },
+            Btn::Rail => button::Style {
+                background: hovered.then_some(Background::Color(k.surface_hi)),
+                text_color: if hovered { k.fg } else { k.muted },
+                border: border::rounded(5).color(if hovered { k.border } else { Color::TRANSPARENT }).width(1),
+                ..Default::default()
+            },
+            Btn::RailOn => button::Style {
+                background: Some(Background::Color(k.info.scale_alpha(if hovered { 0.28 } else { 0.20 }))),
+                text_color: k.fg,
+                border: border::rounded(5).color(k.info).width(1),
+                ..Default::default()
             },
         }
     }

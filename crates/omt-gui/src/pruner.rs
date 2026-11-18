@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use iced::widget::{button, column, container, pick_list, row, scrollable, slider, space, text, text_input, toggler, tooltip};
+use iced::widget::{button, column, container, pick_list, row, scrollable, slider, space, text, text_input, toggler};
 use iced::{Element, Length, Task};
 use omt_prune::{Layer, Selection, Shape, TimeOp};
 use omt_render::style::MapStyle;
@@ -28,12 +28,20 @@ pub enum Tool {
 impl Tool {
     const ALL: [Tool; 4] = [Tool::Box, Tool::Circle, Tool::Polygon, Tool::Split];
     /// Glyph for the tool rail button.
-    fn rail_glyph(self) -> &'static str {
+    fn rail_glyph(self) -> omt_art::Glyph {
         match self {
-            Self::Box => "▭",
-            Self::Circle => "◯",
-            Self::Polygon => "⬠",
-            Self::Split => "⟋",
+            Self::Box => omt_art::Glyph::SelBox,
+            Self::Circle => omt_art::Glyph::SelCircle,
+            Self::Polygon => omt_art::Glyph::SelPolygon,
+            Self::Split => omt_art::Glyph::SelSplit,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Box => "Box select",
+            Self::Circle => "Circle select",
+            Self::Polygon => "Polygon select",
+            Self::Split => "Split select",
         }
     }
     fn hint(self) -> &'static str {
@@ -72,6 +80,8 @@ pub enum PrunerMsg {
     Optimize,
     OptimizeDone(Result<String, String>),
     FitView,
+    /// Zoom about the view center (rail buttons).
+    Zoom(f32),
     /// Show/hide the rendering row (quality · detail · sun).
     ToggleRender,
     /// Show/hide the time-selection controls.
@@ -413,6 +423,11 @@ impl PrunerState {
                 self.ctl.fit();
                 return self.ctl.refill(sess.store.as_ref()).map(PrunerMsg::Tiles);
             }
+            PrunerMsg::Zoom(f) => {
+                let at = (self.ctl.camera.cx, self.ctl.camera.cz);
+                self.ctl.camera.zoom_at(f, at);
+                return self.ctl.refill(sess.store.as_ref()).map(PrunerMsg::Tiles);
+            }
             PrunerMsg::ToggleRender => self.render_open = !self.render_open,
             PrunerMsg::ToggleTime => self.time_open = !self.time_open,
         }
@@ -627,7 +642,8 @@ impl PrunerState {
                 .style(style::button_style(Btn::Danger))
                 .into()
         };
-        let mut sidebar = column![text(self.tool.hint()).size(11).color(style::muted())].spacing(8);
+        let head = row![text(self.tool.name()).size(12).font(style::BOLD), iced::widget::space::horizontal()].align_y(iced::Alignment::Center);
+        let mut sidebar = column![head, text(self.tool.hint()).size(11).color(style::muted())].spacing(8);
         if self.time_open {
             sidebar = sidebar
                 .push(time_row)
@@ -647,7 +663,7 @@ impl PrunerState {
             .push(scrollable(layers).height(Length::Fill))
             .push(text(format!("{} of {} chunks selected", self.red.len(), total)).size(12))
             .push(prune_area);
-        let sidebar = sidebar.padding(10).width(268);
+        let sidebar = sidebar.padding([8, 10]).width(262);
 
         let viewer: Element<'_, PrunerMsg> = match &self.ctl.map {
             Some(map) => crate::mapview::element(MapView { map, camera: self.ctl.camera, overlay: self.overlay(sess.summary.spawn), on_event: Box::new(PrunerMsg::Map) }),
@@ -667,50 +683,71 @@ impl PrunerState {
                     .style(style::panel()),
             );
         }
-        row![
-            container(sidebar).height(Length::Fill).style(style::panel()),
-            row![self.tool_rail(), over_map].width(Length::Fill),
-        ]
-        .height(Length::Fill)
-        .into()
+        // Same anatomy as the Map Viewer: tool rail | nav + map | panel.
+        row![self.tool_rail(), over_map, container(sidebar).height(Length::Fill).style(style::rail())]
+            .height(Length::Fill)
+            .into()
     }
 
-    /// The map's container nav: dimension, map style, grids, rulers, HUD
-    /// toggles, the render disclosure and Fit — one compact row.
+    /// The map's container nav (same as the Map Viewer's): dimension, map
+    /// style and ruler on the left, the rendering disclosure on the right.
+    /// Overlays, zoom and fit live on the tool rail.
     fn nav(&self) -> Element<'_, PrunerMsg> {
-        use iced::widget::toggler;
-        let dims = pick_list(Dimension::ALL.map(|d| DimChoice(d.id())), Some(DimChoice(self.ctl.dim)), |d: DimChoice| PrunerMsg::Dim(d.0)).text_size(12).width(100);
-        let styles = pick_list(MapStyle::ALL.to_vec(), Some(self.look.style.style), |s| PrunerMsg::Look(crate::maplook::LookMsg::Style(s))).text_size(12).width(116);
-        let grids = pick_list(crate::maplook::GridChoice::ALL.to_vec(), Some(crate::maplook::GridChoice(self.look.chunk_grid)), |g| PrunerMsg::Look(crate::maplook::LookMsg::ChunkGrid(g))).text_size(12).width(92);
-        let rulers = pick_list(crate::mapview_overlay::Ruler::ALL.to_vec(), Some(self.look.ruler), |r| PrunerMsg::Look(crate::maplook::LookMsg::Ruler(r))).text_size(12).width(110);
+        let dims = pick_list(Dimension::ALL.map(|d| DimChoice(d.id())), Some(DimChoice(self.ctl.dim)), |d: DimChoice| PrunerMsg::Dim(d.0)).text_size(12).width(112);
+        let styles = pick_list(MapStyle::ALL.to_vec(), Some(self.look.style.style), |s| PrunerMsg::Look(crate::maplook::LookMsg::Style(s))).text_size(12).width(136);
+        let rulers = pick_list(crate::mapview_overlay::Ruler::ALL.to_vec(), Some(self.look.ruler), |r| PrunerMsg::Look(crate::maplook::LookMsg::Ruler(r))).text_size(12).width(120);
+        let open = self.render_open;
+        let render = row![
+            crate::assets::glyph(omt_art::Glyph::Sun, if open { style::fg() } else { style::muted() }, 14.0),
+            text("Rendering").size(12),
+            crate::assets::glyph(if open { omt_art::Glyph::ChevronDown } else { omt_art::Glyph::ChevronRight }, style::muted(), 10.0),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
         row![
             dims,
             styles,
-            grids,
             rulers,
-            toggler(self.look.region_grid).label("Regions").size(13).text_size(11).width(78).on_toggle(|v| PrunerMsg::Look(crate::maplook::LookMsg::RegionGrid(v))),
-            toggler(self.look.hud).label("Scale").size(13).text_size(11).width(66).on_toggle(|v| PrunerMsg::Look(crate::maplook::LookMsg::Hud(v))),
-            toggler(self.look.spawn).label("Spawn").size(13).text_size(11).width(72).on_toggle(|v| PrunerMsg::Look(crate::maplook::LookMsg::Spawn(v))),
             iced::widget::space::horizontal(),
-            button(text("Sun").size(11)).padding([5, 7]).on_press(PrunerMsg::ToggleRender).style(style::button_style(if self.render_open { Btn::ChipOn } else { Btn::Chip })),
-            button(text("Fit").size(12)).padding([5, 7]).on_press(PrunerMsg::FitView).style(style::button_style(Btn::Standard)),
+            button(render).padding([6, 10]).on_press(PrunerMsg::ToggleRender).style(style::button_style(if open { Btn::ChipOn } else { Btn::Standard })),
         ]
-        .spacing(6)
+        .spacing(8)
         .align_y(iced::Alignment::Center)
         .into()
     }
 
-    /// Photoshop-style tool rail docked left of the map (shared geometry
-    /// with the Map Viewer's rail — `maprail`).
+    /// Photoshop-style tool rail docked left of the map — same anatomy as
+    /// the Map Viewer's (`maprail`): selection tools, then the shared map
+    /// overlays, with zoom/fit pinned at the bottom.
     fn tool_rail(&self) -> Element<'_, PrunerMsg> {
-        let right = tooltip::Position::Right;
-        let mut col: Vec<Element<'_, PrunerMsg>> = Tool::ALL
+        use crate::maplook::{GridChoice, LookMsg};
+        use crate::maprail::{self, Side};
+        let mut top: Vec<Element<'_, PrunerMsg>> = Tool::ALL
             .iter()
-            .map(|&t| crate::maprail::button(crate::maprail::glyph(t.rail_glyph()), t.hint(), self.tool == t, PrunerMsg::Tool(t), right))
+            .map(|&t| maprail::tool(t.rail_glyph(), format!("{} — {}", t.name(), t.hint()), self.tool == t, Some(PrunerMsg::Tool(t)), Side::Left))
             .collect();
-        col.push(crate::maprail::separator());
-        col.push(crate::maprail::button(crate::maprail::glyph("⏱"), "Time: select chunks by InhabitedTime", self.time_open, PrunerMsg::ToggleTime, right));
-        crate::maprail::strip(col)
+        top.push(maprail::tool(omt_art::Glyph::Clock, "Time: select chunks by InhabitedTime", self.time_open, Some(PrunerMsg::ToggleTime), Side::Left));
+        top.push(maprail::separator());
+        let look = &self.look;
+        let next_grid = match look.chunk_grid {
+            None => Some(true),
+            Some(true) => Some(false),
+            Some(false) => None,
+        };
+        top.extend(maprail::overlay_group(maprail::Overlays {
+            chunk_grid: look.chunk_grid,
+            region_grid: look.region_grid,
+            spawn: look.spawn,
+            spawn_available: self.ctl.dim == 0,
+            hud: look.hud,
+            shortcuts: false,
+            cycle_chunk_grid: PrunerMsg::Look(LookMsg::ChunkGrid(GridChoice(next_grid))),
+            toggle_region_grid: PrunerMsg::Look(LookMsg::RegionGrid(!look.region_grid)),
+            toggle_spawn: PrunerMsg::Look(LookMsg::Spawn(!look.spawn)),
+            toggle_hud: PrunerMsg::Look(LookMsg::Hud(!look.hud)),
+        }));
+        let bottom = maprail::nav_group(PrunerMsg::Zoom(2.0), PrunerMsg::Zoom(0.5), PrunerMsg::FitView, false);
+        maprail::strip(top, bottom)
     }
 }
 

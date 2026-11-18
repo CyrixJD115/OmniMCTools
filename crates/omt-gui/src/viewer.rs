@@ -37,13 +37,14 @@ pub enum PanelTab {
 impl PanelTab {
     pub const ALL: [PanelTab; 5] = [Self::View, Self::Style, Self::Layers, Self::Find, Self::Export];
 
-    pub const fn icon(self) -> omt_art::Icon {
+    /// Monochrome glyph for the panel's icon strip (matches the rail).
+    pub const fn glyph(self) -> omt_art::Glyph {
         match self {
-            Self::View => omt_art::Icon::Map,
-            Self::Style => omt_art::Icon::Lighting,
-            Self::Layers => omt_art::Icon::Layers,
-            Self::Find => omt_art::Icon::Bookmark,
-            Self::Export => omt_art::Icon::Archive,
+            Self::View => omt_art::Glyph::Eye,
+            Self::Style => omt_art::Glyph::Contrast,
+            Self::Layers => omt_art::Glyph::Layers,
+            Self::Find => omt_art::Glyph::Search,
+            Self::Export => omt_art::Glyph::Export,
         }
     }
 
