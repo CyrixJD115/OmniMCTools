@@ -8,14 +8,18 @@
 
 pub mod area;
 pub mod blocks3d;
+pub mod finder;
 pub mod map;
 pub mod markers;
 pub mod palette;
+pub mod players;
 pub mod render;
+pub mod rules;
 pub mod source;
 pub mod style;
 pub mod tilecache;
 pub mod voxel;
+pub mod workers;
 
 pub use area::{AreaSpec, AreaStats, Band, MAX_LEVEL, NameTable, TILE_CHUNKS, TILE_PX, TileImage, TileKey, build_tile, render_area, level_stride, stride_for};
 pub use map::{MapImage, render_chunks, render_world, shade_all};

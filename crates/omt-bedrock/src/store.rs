@@ -236,6 +236,20 @@ impl BedrockWorld {
         Ok(wanted.into_iter().zip(vals).filter_map(|(k, v)| Some((k, v?.to_vec()))).collect())
     }
 
+    /// Every key starting with `prefix` (sorted; e.g. `player_server_`).
+    pub fn prefix_keys(&self, prefix: &[u8]) -> WorldResult<Vec<Vec<u8>>> {
+        let mut keys: Vec<Vec<u8>> = self
+            .db()
+            .collect_prefix_keys_owned(prefix, Self::cached_reads())
+            .map_err(|e| WorldError::Store(format!("leveldb prefix scan: {e}")))?
+            .into_iter()
+            .map(|k| k.to_vec())
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        Ok(keys)
+    }
+
     /// Full decoded chunk.
     pub fn read_chunk_full(&self, dim: u8, x: i32, z: i32) -> WorldResult<Option<Chunk>> {
         let records = self.column_records(dim, x, z)?;

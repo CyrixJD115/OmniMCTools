@@ -76,6 +76,8 @@ pub enum MapUiMsg {
     Quality(MapQuality),
     Detail(i8),
     Smooth(bool),
+    /// Render CPU threads (0 = all cores).
+    Threads(u16),
 }
 
 /// The map toolbar: quality preset, detail bias, smooth scaling — the same
@@ -111,11 +113,13 @@ pub struct MapConfig {
     /// Detail bias: +1 = one level sharper than the zoom needs (more reads),
     /// -1 = one level coarser (faster).
     pub detail_bias: i8,
+    /// CPU threads for rendering (0 = all cores; uNmINeD's processor count).
+    pub threads: u16,
 }
 
 impl Default for MapConfig {
     fn default() -> Self {
-        Self { quality: MapQuality::Auto, memory_mb: 0, disk_cache: true, disk_cache_mb: 1024, smooth: true, parallel: 0, detail_bias: 0 }
+        Self { quality: MapQuality::Auto, memory_mb: 0, disk_cache: true, disk_cache_mb: 1024, smooth: true, parallel: 0, detail_bias: 0, threads: 0 }
     }
 }
 

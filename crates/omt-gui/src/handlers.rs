@@ -78,7 +78,7 @@ impl OmniMCTools {
                 // Keep things changed outside the Settings page.
                 self.settings_draft.favorites = self.settings.favorites.clone();
                 self.settings_draft.bookmarks = self.settings.bookmarks.clone();
-                self.settings_draft.viewer = self.settings.viewer;
+                self.settings_draft.viewer = self.settings.viewer.clone();
                 self.settings_draft.theme = self.settings.theme;
                 self.settings_draft.rail_collapsed = self.settings.rail_collapsed;
                 self.settings_draft.texture_pack = self.settings.texture_pack.clone();

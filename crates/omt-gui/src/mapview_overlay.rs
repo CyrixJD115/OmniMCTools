@@ -142,9 +142,55 @@ fn draw_rulers(frame: &mut Frame, size: Size, cam: Camera, ruler: Ruler) {
     frame.fill_text(Text { content: match ruler { Ruler::Chunks => "ch", Ruler::Regions => "rg", _ => "bl" }.into(), position: Point::new(3.0, 4.0), color: tick, size: iced::Pixels(10.0), ..Text::default() });
 }
 
+/// Highlighter marks, batched per color (one path fill each).
+fn draw_highlights(frame: &mut Frame, ov: &Overlay, size: Size, cam: Camera) {
+    let mut by_color: Vec<(Color, Vec<&crate::mapview::HlMark>)> = Vec::new();
+    for m in &ov.highlights {
+        match by_color.iter_mut().find(|(c, _)| *c == m.color) {
+            Some((_, v)) => v.push(m),
+            None => by_color.push((m.color, vec![m])),
+        }
+    }
+    for (color, marks) in by_color {
+        let path = Path::new(|b| {
+            for m in &marks {
+                let px = (m.size * cam.zoom as f64) as f32;
+                let p = cam.to_screen(size, m.x, m.z);
+                if px.max(0.0) + p.x < 0.0 || p.y + px < 0.0 || p.x > size.width || p.y > size.height {
+                    continue;
+                }
+                if m.dot && px < 4.0 {
+                    let c = Point::new(p.x + px / 2.0 - 2.0, p.y + px / 2.0 - 2.0);
+                    b.rectangle(c, Size::new(4.0, 4.0));
+                } else {
+                    b.rectangle(p, Size::new(px.max(1.0), px.max(1.0)));
+                }
+            }
+        });
+        frame.fill(&path, color);
+    }
+    if let Some((x0, z0, x1, z1)) = ov.border {
+        let a = cam.to_screen(size, x0, z0);
+        let b = cam.to_screen(size, x1, z1);
+        let r = Path::rectangle(a, Size::new(b.x - a.x, b.y - a.y));
+        frame.stroke(&r, Stroke::default().with_color(Color::from_rgba(0.95, 0.25, 0.25, 0.85)).with_width(2.0));
+    }
+    if let Some((x0, z0, x1, z1)) = ov.selection {
+        let a = cam.to_screen(size, x0, z0);
+        let b = cam.to_screen(size, x1, z1);
+        let r = Path::rectangle(a, Size::new((b.x - a.x).max(2.0), (b.y - a.y).max(2.0)));
+        frame.fill(&r, Color::from_rgba(1.0, 0.85, 0.2, 0.12));
+        frame.stroke(&r, Stroke::default().with_color(Color::from_rgba(1.0, 0.85, 0.2, 0.95)).with_width(2.0));
+    }
+}
+
 /// Everything above the tiles.
 pub fn draw_overlay(frame: &mut Frame, ov: &Overlay, size: Size, cam: Camera) {
         let chunk_px = 16.0 * cam.zoom;
+        if ov.dim_map > 0.0 {
+            frame.fill_rectangle(Point::ORIGIN, size, Color::from_rgba(0.0, 0.0, 0.0, ov.dim_map));
+        }
+        draw_highlights(frame, ov, size, cam);
         // Slime chunks.
         if !ov.slime.is_empty() {
             let slime = Path::new(|b| {
@@ -177,6 +223,19 @@ pub fn draw_overlay(frame: &mut Frame, ov: &Overlay, size: Size, cam: Camera) {
                 }
             });
             frame.stroke(&grid, Stroke::default().with_color(Color::from_rgba(0.25, 0.85, 0.95, 0.35)).with_width(1.0));
+            // `r.x.z` labels when a region is big enough on screen.
+            if ov.region_labels && chunk_px * 32.0 >= 90.0 {
+                let mut rx = (x0 / 512.0).floor() as i32;
+                while (rx as f64) * 512.0 <= x1 {
+                    let mut rz = (z0 / 512.0).floor() as i32;
+                    while (rz as f64) * 512.0 <= z1 {
+                        let p = cam.to_screen(size, rx as f64 * 512.0, rz as f64 * 512.0);
+                        frame.fill_text(Text { content: format!("r.{rx}.{rz}"), position: Point::new(p.x + 4.0, p.y + 3.0), color: Color::from_rgba(0.6, 0.95, 1.0, 0.9), size: iced::Pixels(11.0), ..Text::default() });
+                        rz += 1;
+                    }
+                    rx += 1;
+                }
+            }
         }
         if show_chunks {
             let (x0, z0) = cam.to_block(size, Point::ORIGIN);

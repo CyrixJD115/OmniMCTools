@@ -27,6 +27,7 @@ pub enum SettingsMsg {
     MapDiskCacheMb(u32),
     MapSmooth(bool),
     MapParallel(u8),
+    MapThreads(u16),
     MapDetail(i8),
     ClearMapCache,
     ClearRecent,
@@ -123,6 +124,10 @@ pub fn view<'a>(s: &'a Settings, dirty: bool, appearance: Element<'a, crate::Mes
             slider(0..=8, s.map_parallel, SettingsMsg::MapParallel).width(160),
             text(par_label).size(12).width(48),
         ].spacing(8).align_y(iced::Alignment::Center).into()),
+        item("CPU Cores", "Threads the map renderer may use (also the Map Viewer's CPU picker). Max = every core; fewer keeps the computer responsive.", row![
+            slider(0..=omt_render::workers::cpus() as u16, s.map_threads, SettingsMsg::MapThreads).width(160),
+            text(if s.map_threads == 0 { format!("Max ({})", omt_render::workers::cpus()) } else { s.map_threads.to_string() }).size(12).width(70),
+        ].spacing(8).align_y(iced::Alignment::Center).into()),
         item("Smooth Low-Detail Tiles", "Blend reduced-detail tiles instead of showing blocky pixels.", toggler(s.map_smooth).on_toggle(SettingsMsg::MapSmooth).into()),
         item("Disk Tile Cache", "Keep rendered tiles on disk (pixel cache) so a world you reopen shows its map instantly. Tiles are keyed by the world's content, so edits are never shown stale.", toggler(s.map_disk_cache).on_toggle(SettingsMsg::MapDiskCache).into()),
         item("Disk Cache Size", "Oldest tiles are removed beyond this size.", row![
@@ -198,6 +203,7 @@ pub fn apply(s: &mut Settings, msg: &SettingsMsg) -> bool {
         SettingsMsg::MapDiskCacheMb(v) => s.map_disk_cache_mb = *v,
         SettingsMsg::MapSmooth(v) => s.map_smooth = *v,
         SettingsMsg::MapParallel(v) => s.map_parallel = *v,
+        SettingsMsg::MapThreads(v) => s.map_threads = *v,
         SettingsMsg::MapDetail(v) => s.map_detail_bias = *v,
         SettingsMsg::ClearRecent => s.recent.clear(),
         SettingsMsg::Reset => *s = Settings::default(),

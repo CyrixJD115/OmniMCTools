@@ -87,7 +87,7 @@ impl ViewerState {
             tooltip::Position::Left,
         );
         container(
-            row![mode, dims, styles, space::horizontal(), goto_row, tools, export]
+            row![mode, dims, styles, space::horizontal(), goto_row, self.cpu_picker(), tools, export]
                 .spacing(8)
                 .align_y(Alignment::Center),
         )
@@ -181,13 +181,14 @@ impl ViewerState {
 
     fn panel<'a>(&'a self, bookmarks: &'a [Bookmark]) -> Element<'a, ViewerMsg> {
         let Some(tab) = self.prefs.panel() else { return space::vertical().width(0).height(Length::Fill).into() };
-        let body: Element<'a, ViewerMsg> = match tab {
+        let body: Element<'a, ViewerMsg> = if let Some(b) = self.ext_tab() { b } else { match tab {
             PanelTab::View => self.view_tab(),
             PanelTab::Style => self.style_tab(),
             PanelTab::Layers => self.layers_tab(),
             PanelTab::Find => self.find_tab(bookmarks),
             PanelTab::Export => self.export_tab(),
-        };
+            _ => self.view_tab(),
+        } };
         let head = row![
             text(tab.name()).size(12).font(style::BOLD),
             space::horizontal(),
@@ -322,7 +323,9 @@ impl ViewerState {
         col = col
             .push(labeled("Chunk grid", String::new(), segmented(&[(None, "Auto"), (Some(true), "On"), (Some(false), "Off")], p.chunk_grid, ViewerMsg::ChunkGrid)))
             .push(labeled("Rulers", String::new(), segmented(&crate::mapview_overlay::Ruler::ALL.map(|r| (r, r.name())), p.ruler, ViewerMsg::Ruler)))
-            .push(switch("Region grid (32×32 chunks)", p.region_grid, |v| ViewerMsg::Layer(Layer::RegionGrid, v)));
+            .push(switch("Region grid (32×32 chunks)", p.region_grid, |v| ViewerMsg::Layer(Layer::RegionGrid, v)))
+            .push(switch("Region coordinates on the grid", p.region_labels, |v| ViewerMsg::Layer(Layer::RegionLabels, v)))
+            .push(switch("World border (Java)", p.border, |v| ViewerMsg::Layer(Layer::Border, v)));
         col = col.push(heading("MARKERS"));
         col = col
             .push(switch(if slime_note.is_empty() { "Slime chunks" } else { "Slime chunks (seed unknown)" }, p.slime, |v| ViewerMsg::Layer(Layer::Slime, v)))
@@ -388,7 +391,7 @@ impl ViewerState {
             .on_press(ViewerMsg::Export)
             .style(style::button_style(Btn::Standard));
         column![
-            heading("EXPORT"),
+            heading("EXPORT VIEW"),
             export,
             text("Exports exactly what the canvas shows, at its pixel size.").size(11).color(style::muted()),
             heading("CURRENT VIEW"),
@@ -400,6 +403,7 @@ impl ViewerState {
                 text(format!("Chunks loaded: {}", self.ctl.map.as_ref().map_or(0, |m| m.tiles.len()))).size(12),
             ]
             .spacing(4),
+            self.export_area_ui(),
         ]
         .spacing(8)
         .into()
@@ -416,8 +420,15 @@ impl ViewerState {
             markers.push(Marker { x: x as f64 + 0.5, z: z as f64 + 0.5, label: "Spawn".into(), icon: Some(icon_handle(Icon::Spawn)), color: Color::WHITE });
         }
         if p.players {
-            for pl in self.players.iter().filter(|pl| pl.dim == self.ctl.dim) {
-                markers.push(Marker { x: pl.x, z: pl.z, label: pl.label.clone(), icon: Some(icon_handle(Icon::Player)), color: style::t().warn });
+            // Named server players once loaded; the quick markers before.
+            if self.ext.players.is_empty() {
+                for pl in self.players.iter().filter(|pl| pl.dim == self.ctl.dim) {
+                    markers.push(Marker { x: pl.x, z: pl.z, label: pl.label.clone(), icon: Some(icon_handle(Icon::Player)), color: style::t().warn });
+                }
+            } else {
+                for pl in self.ext.players.iter().filter(|pl| pl.dim == self.ctl.dim) {
+                    markers.push(Marker { x: pl.x, z: pl.z, label: pl.label(), icon: Some(icon_handle(Icon::Player)), color: style::t().warn });
+                }
             }
         }
         if p.bookmarks {
@@ -451,7 +462,9 @@ impl ViewerState {
             None => String::new(),
         };
         let textured = if self.textured_active() { self.tex.cells.iter().map(|(&(x, z), h)| (x, z, h.clone())).collect() } else { Vec::new() };
-        Overlay { caption, markers, chunk_grid: p.chunk_grid, region_grid: p.region_grid, slime: self.slime.clone(), hud: p.hud, textured, textured_cell: crate::viewer_tex::CELL, ruler: p.ruler, measure: self.measure, cursor: self.hover, ..Default::default() }
+        let mut ov = Overlay { caption, markers, chunk_grid: p.chunk_grid, region_grid: p.region_grid, slime: self.slime.clone(), hud: p.hud, textured, textured_cell: crate::viewer_tex::CELL, ruler: p.ruler, measure: self.measure, cursor: self.hover, ..Default::default() };
+        self.ext_overlay(&mut ov);
+        ov
     }
 
     // --------------------------------------------------------------- view

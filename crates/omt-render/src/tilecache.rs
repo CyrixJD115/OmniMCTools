@@ -26,6 +26,7 @@ pub fn tile_key_hash(fingerprint: u64, dim: u8, opts: &RenderOptions, key: TileK
     h.u64(opts.max_y.map_or(u64::MAX, |y| y as i64 as u64));
     h.u64(opts.min_y as i64 as u64);
     h.u64(opts.biome_tint as u64 | (opts.water_shading as u64) << 1 | (opts.relief as u64) << 2 | (opts.cave as u64) << 3);
+    h.u64(opts.rules);
     h.u64(key.level as u64);
     h.u64(key.tx as i64 as u64);
     h.u64(key.tz as i64 as u64);

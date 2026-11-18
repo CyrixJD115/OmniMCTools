@@ -22,6 +22,26 @@ use crate::session::{Store, WorldSession, blocking};
 /// The side panel's tab (`None` = collapsed to the icon strip).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PanelTab {
+    /// Level properties (level.dat), border, folder.
+    Info,
+    /// Chunk inspector (click-select a chunk).
+    Inspect,
+    /// Server players.
+    Players,
+    /// Biomes in the loaded map.
+    Biomes,
+    /// Surface blocks in the loaded map.
+    Blocks,
+    /// Entities in view.
+    Entities,
+    /// Block filters.
+    Filter,
+    /// Highlighters (block / biome finders, inhabited time).
+    Highlight,
+    /// Stylesheet (tints, custom colors, water, unknown blocks).
+    Stylesheet,
+    /// Saved map settings.
+    Presets,
     /// 2D/3D and rendering quality.
     View,
     /// Map style + sun lighting + biome legend.
@@ -35,11 +55,23 @@ pub enum PanelTab {
 }
 
 impl PanelTab {
-    pub const ALL: [PanelTab; 5] = [Self::View, Self::Style, Self::Layers, Self::Find, Self::Export];
+    pub const ALL: [PanelTab; 15] = [
+        Self::Info, Self::Inspect, Self::Players, Self::Biomes, Self::Blocks, Self::Entities, Self::View, Self::Style, Self::Stylesheet, Self::Filter, Self::Highlight, Self::Layers, Self::Find, Self::Presets, Self::Export,
+    ];
 
     /// Monochrome glyph for the panel's icon strip (matches the rail).
     pub const fn glyph(self) -> omt_art::Glyph {
         match self {
+            Self::Info => omt_art::Glyph::Info,
+            Self::Inspect => omt_art::Glyph::Cube,
+            Self::Players => omt_art::Glyph::Player,
+            Self::Biomes => omt_art::Glyph::Leaf,
+            Self::Blocks => omt_art::Glyph::Texture,
+            Self::Entities => omt_art::Glyph::Entity,
+            Self::Filter => omt_art::Glyph::Filter,
+            Self::Highlight => omt_art::Glyph::Highlight,
+            Self::Stylesheet => omt_art::Glyph::Palette,
+            Self::Presets => omt_art::Glyph::Save,
             Self::View => omt_art::Glyph::Eye,
             Self::Style => omt_art::Glyph::Contrast,
             Self::Layers => omt_art::Glyph::Layers,
@@ -50,8 +82,18 @@ impl PanelTab {
 
     pub const fn name(self) -> &'static str {
         match self {
-            Self::View => "View",
-            Self::Style => "Style",
+            Self::Info => "Level info",
+            Self::Inspect => "Chunk inspector",
+            Self::Players => "Server players",
+            Self::Biomes => "Biomes",
+            Self::Blocks => "Blocks",
+            Self::Entities => "Entities",
+            Self::Filter => "Block filters",
+            Self::Highlight => "Highlighters",
+            Self::Stylesheet => "Stylesheet",
+            Self::Presets => "Saved map settings",
+            Self::View => "Render settings",
+            Self::Style => "Map style",
             Self::Layers => "Layers",
             Self::Find => "Find",
             Self::Export => "Export",
@@ -85,7 +127,7 @@ impl From<ViewerKey> for ViewerMsg {
 }
 
 /// Remembered viewer look (Settings TOML).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ViewerPrefs {
     pub style: StyleParams,
@@ -120,6 +162,16 @@ pub struct ViewerPrefs {
     pub panel_tab: PanelTab,
     /// The side panel is collapsed to its icon strip.
     pub panel_closed: bool,
+    /// Block filters + stylesheet (render rules).
+    pub rules: crate::viewer_rules::MapRules,
+    pub highlights: crate::viewer_highlight::HlPrefs,
+    /// World border (Java level.dat) on the map.
+    pub border: bool,
+    /// `r.x.z` labels on the region grid.
+    pub region_labels: bool,
+    pub presets: Vec<crate::viewer_presets::MapPreset>,
+    /// Saved settings applied to newly opened worlds.
+    pub default_preset: Option<String>,
 }
 
 impl Default for ViewerPrefs {
@@ -132,6 +184,12 @@ impl Default for ViewerPrefs {
             fly_speed: 20.0,
             panel_tab: PanelTab::View,
             panel_closed: false,
+            rules: Default::default(),
+            highlights: Default::default(),
+            border: true,
+            region_labels: true,
+            presets: Vec::new(),
+            default_preset: None,
         }
     }
 }
@@ -176,6 +234,8 @@ pub enum Layer {
     BiomeTint,
     Textures,
     Entities,
+    Border,
+    RegionLabels,
 }
 
 #[derive(Debug, Clone)]
@@ -251,6 +311,8 @@ pub enum ViewerMsg {
     ToolsMenu(bool),
     /// Keyboard navigation from the app subscription.
     Key(ViewerKey),
+    /// uNmINeD-parity panels (see `viewer_ext`).
+    Ext(crate::viewer_ext::ExtMsg),
 }
 
 pub struct ViewerState {
@@ -293,11 +355,19 @@ pub struct ViewerState {
     measuring: bool,
     /// The floating "Tools" menu (open world in another tool) is showing.
     pub tools_menu: bool,
+    /// Extension panels' state (`viewer_ext`).
+    pub ext: crate::viewer_ext::Ext,
 }
 
 impl ViewerState {
-    pub fn new(sess: &WorldSession, prefs: ViewerPrefs) -> Self {
-        let mut ctl = MapController::new(0, Self::opts_for(0, false, None, prefs.biome_tint));
+    pub fn new(sess: &WorldSession, mut prefs: ViewerPrefs) -> Self {
+        if let Some(d) = prefs.default_preset.clone()
+            && let Some(p) = prefs.presets.iter().find(|p| p.name == d).cloned()
+        {
+            p.apply_to(&mut prefs);
+        }
+        let rules = omt_render::rules::register(prefs.rules.compile());
+        let mut ctl = MapController::new(0, Self::opts_for(0, false, None, prefs.biome_tint, rules));
         ctl.post = Some(prefs.style);
         Self {
             ctl,
@@ -328,17 +398,36 @@ impl ViewerState {
             measuring: false,
             // `OMT_DEBUG_VIEWER_MENU=1` pins the Tools menu open (screenshots).
             tools_menu: std::env::var("OMT_DEBUG_VIEWER_MENU").is_ok(),
+            ext: crate::viewer_ext::Ext::with_rules(rules),
         }
     }
 
     /// Render options: no baked relief (the style lights the map).
-    fn opts_for(dim: u8, cave: bool, slicer: Option<i32>, tint: bool) -> RenderOptions {
+    fn opts_for(dim: u8, cave: bool, slicer: Option<i32>, tint: bool, rules: u64) -> RenderOptions {
         let base = RenderOptions::for_dimension(dim);
-        RenderOptions { relief: false, cave, max_y: slicer.or(base.max_y), biome_tint: tint, ..base }
+        RenderOptions { relief: false, cave, max_y: slicer.or(base.max_y), biome_tint: tint, rules, ..base }
+    }
+
+    /// Render options for dimension `dim` with the current look.
+    fn opts_dim(&self, dim: u8) -> RenderOptions {
+        Self::opts_for(dim, self.cave, self.slicer, self.prefs.biome_tint, self.ext.rules_id)
     }
 
     fn opts(&self) -> RenderOptions {
-        Self::opts_for(self.ctl.dim, self.cave, self.slicer, self.prefs.biome_tint)
+        self.opts_dim(self.ctl.dim)
+    }
+
+    /// Switch to `dim` (when needed) and center on (x, z).
+    pub(crate) fn goto_dim(&mut self, sess: &WorldSession, dim: u8, x: f64, z: f64) -> Task<ViewerMsg> {
+        let store = sess.store.as_ref();
+        let mut tasks = Vec::new();
+        if dim != self.ctl.dim {
+            let o = self.opts_dim(dim);
+            tasks.push(self.ctl.set_dim(dim, o, store).map(ViewerMsg::Tiles));
+        }
+        self.center(x, z);
+        tasks.push(self.ctl.refill(store).map(ViewerMsg::Tiles));
+        Task::batch(tasks)
     }
 
     /// Start: load the map and read markers (players, seed) in the background.
@@ -357,7 +446,8 @@ impl ViewerState {
             }),
             |m| ViewerMsg::Markers(Arc::new(m)),
         );
-        Task::batch([tiles, markers])
+        let ext = self.ext_load(sess);
+        Task::batch([tiles, markers, ext])
     }
 
     pub fn status_line(&self) -> String {
@@ -368,12 +458,12 @@ impl ViewerState {
         }
     }
 
-    fn rerender(&mut self, store: Option<&Store>) -> Task<ViewerMsg> {
+    pub(crate) fn rerender(&mut self, store: Option<&Store>) -> Task<ViewerMsg> {
         let o = self.opts();
         self.ctl.set_options(o, store).map(ViewerMsg::Tiles)
     }
 
-    fn restyle(&mut self) {
+    pub(crate) fn restyle(&mut self) {
         self.ctl.set_post(Some(self.prefs.style));
         self.regrid = true;
     }
@@ -429,7 +519,8 @@ impl ViewerState {
                 | ViewerMsg::Dpi3(_)
                 | ViewerMsg::Ev3(_)
                 | ViewerMsg::ToolsMenu(_)
-                | ViewerMsg::Panel(_) => {}
+                | ViewerMsg::Panel(_)
+                | ViewerMsg::Ext(_) => {}
                 ViewerMsg::Map(MapEvent::Resize(_)) => {}
                 _ => self.tools_menu = false,
             }
@@ -524,7 +615,7 @@ impl ViewerState {
             ViewerMsg::Map(e) => self.on_event(e, store),
             ViewerMsg::MapUi(_) => self.ctl.refill(store).map(ViewerMsg::Tiles),
             ViewerMsg::Dim(d) => {
-                let o = Self::opts_for(d, self.cave, self.slicer, self.prefs.biome_tint);
+                let o = self.opts_dim(d);
                 self.ctl.set_dim(d, o, store).map(ViewerMsg::Tiles)
             }
             ViewerMsg::Style(s) => {
@@ -577,6 +668,8 @@ impl ViewerState {
                         self.prefs.entities = on;
                         self.ent_rect = None;
                     }
+                    Layer::Border => self.prefs.border = on,
+                    Layer::RegionLabels => self.prefs.region_labels = on,
                     Layer::BiomeTint => {
                         self.prefs.biome_tint = on;
                         return self.rerender(store);
@@ -642,7 +735,7 @@ impl ViewerState {
                 let Some(b) = self.my_bookmarks(bookmarks).get(i).map(|(_, b)| (*b).clone()) else { return Task::none() };
                 let mut tasks = Vec::new();
                 if b.dim != self.ctl.dim {
-                    let o = Self::opts_for(b.dim, self.cave, self.slicer, self.prefs.biome_tint);
+                    let o = self.opts_dim(b.dim);
                     tasks.push(self.ctl.set_dim(b.dim, o, store).map(ViewerMsg::Tiles));
                 }
                 self.center(b.x as f64, b.z as f64);
@@ -694,7 +787,7 @@ impl ViewerState {
                 };
                 let mut tasks = Vec::new();
                 if self.ctl.dim != 0 {
-                    let o = Self::opts_for(0, self.cave, self.slicer, self.prefs.biome_tint);
+                    let o = self.opts_dim(0);
                     tasks.push(self.ctl.set_dim(0, o, store).map(ViewerMsg::Tiles));
                 }
                 self.center(x as f64 + 0.5, z as f64 + 0.5);
@@ -710,7 +803,7 @@ impl ViewerState {
                 };
                 let mut tasks = Vec::new();
                 if dim != self.ctl.dim {
-                    let o = Self::opts_for(dim, self.cave, self.slicer, self.prefs.biome_tint);
+                    let o = self.opts_dim(dim);
                     tasks.push(self.ctl.set_dim(dim, o, store).map(ViewerMsg::Tiles));
                 }
                 self.center(x, z);
@@ -758,6 +851,7 @@ impl ViewerState {
             }
             ViewerMsg::Key(k) => self.update(sess, bookmarks, k.into()),
             ViewerMsg::OpenIn(_) => Task::none(),
+            ViewerMsg::Ext(m) => self.update_ext(sess, m),
         };
         self.plan_slime();
         if self.prefs.style.style == MapStyle::Biomes
@@ -769,7 +863,9 @@ impl ViewerState {
         }
         let regrid = if std::mem::take(&mut self.regrid) && self.v3.on { self.request_grid() } else { Task::none() };
         let ents = self.plan_entities(store);
-        Task::batch([task, self.plan_textures(), regrid, ents])
+        self.refresh_legends();
+        let hl = self.plan_highlights(store);
+        Task::batch([task, self.plan_textures(), regrid, ents, hl])
     }
 
     /// Query entities of the visible chunks when zoomed in enough.
@@ -860,6 +956,7 @@ impl ViewerState {
                 }
                 Task::none()
             }
+            MapEvent::Press { at, right: false, .. } if self.prefs.panel() == Some(PanelTab::Inspect) && self.ext.inspect.click_select => self.inspect_click(store, at).unwrap_or_else(Task::none),
             MapEvent::Press { at, right: false, .. } => {
                 // Left click fills the go-to fields (copy coordinates) and
                 // starts a measurement (kept only if the pointer moves).

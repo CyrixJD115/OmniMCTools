@@ -122,6 +122,27 @@ pub struct Overlay {
     pub measure: Option<[(f64, f64); 2]>,
     /// Cursor position (block coordinates) — marked on the rulers.
     pub cursor: Option<(f64, f64)>,
+    /// Highlighter marks (block / biome finders, inhabited time).
+    pub highlights: Vec<HlMark>,
+    /// Darken the map under highlights (0 = off, up to ~0.7).
+    pub dim_map: f32,
+    /// World border (min x, min z, max x, max z) in blocks.
+    pub border: Option<(f64, f64, f64, f64)>,
+    /// Label region grid cells with their `r.x.z` coordinates.
+    pub region_labels: bool,
+    /// A selected block rectangle (chunk inspector, export area).
+    pub selection: Option<(f64, f64, f64, f64)>,
+}
+
+/// One highlighter mark: a square of `size` blocks at block (x, z).
+#[derive(Debug, Clone, Copy)]
+pub struct HlMark {
+    pub x: f64,
+    pub z: f64,
+    pub size: f64,
+    pub color: Color,
+    /// Dots keep a minimum on-screen size (block finder); squares scale.
+    pub dot: bool,
 }
 
 /// A labeled map pin.

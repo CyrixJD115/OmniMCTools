@@ -485,10 +485,16 @@ pub enum Glyph {
     Eye,
     Contrast,
     Layers,
+    Info,
+    Cube,
+    Leaf,
+    Palette,
+    Save,
+    Highlight,
 }
 
 impl Glyph {
-    pub const ALL: [Glyph; 38] = [
+    pub const ALL: [Glyph; 44] = [
         Glyph::Search,
         Glyph::Close,
         Glyph::Plus,
@@ -527,6 +533,12 @@ impl Glyph {
         Glyph::Eye,
         Glyph::Contrast,
         Glyph::Layers,
+        Glyph::Info,
+        Glyph::Cube,
+        Glyph::Leaf,
+        Glyph::Palette,
+        Glyph::Save,
+        Glyph::Highlight,
     ];
 }
 

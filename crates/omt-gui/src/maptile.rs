@@ -134,6 +134,30 @@ impl crate::mapdata::MapData {
         None
     }
 
+    /// Surface blocks of the display-level tiles, most common first.
+    pub fn block_legend(&self) -> Vec<(String, usize)> {
+        let mut m: HashMap<String, usize> = HashMap::new();
+        for (k, t) in &self.tiles {
+            if k.level != self.level {
+                continue;
+            }
+            let mut local: HashMap<u16, usize> = HashMap::new();
+            for &s in &t.surface {
+                if s != u16::MAX {
+                    *local.entry(s).or_default() += 1;
+                }
+            }
+            for (s, n) in local {
+                if let Some(name) = t.names.get(s as usize) {
+                    *m.entry(name.clone()).or_default() += n;
+                }
+            }
+        }
+        let mut v: Vec<(String, usize)> = m.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        v
+    }
+
     /// Biomes of the display-level tiles, most common first.
     pub fn biome_legend(&self) -> Vec<(String, usize)> {
         let mut m = HashMap::new();
