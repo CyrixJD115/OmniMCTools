@@ -268,7 +268,7 @@ impl EditorState {
         let mode = container(mode).padding(10);
         if self.preview.on {
             let status = if self.preview.frame.is_none() || self.preview.building { "loading blocks around the selection…".to_string() } else { "click two blocks to select in 3D · selection tinted blue".to_string() };
-            let canvas = container(iced::widget::canvas(crate::viewer_3d::Canvas3 { frame: self.preview.frame.as_ref(), crisp: false, mouse_look: false, locked: false, status, on_event: Box::new(EditMsg::PEv) }).width(Length::Fill).height(Length::Fill)).clip(true);
+            let canvas = container(iced::widget::canvas(crate::viewer_3d::Canvas3 { frame: self.preview.frame.as_ref(), crisp: false, iso: false, mouse_look: false, locked: false, status, on_event: Box::new(EditMsg::PEv) }).width(Length::Fill).height(Length::Fill)).clip(true);
             return row![self.panel(), iced::widget::stack![canvas, mode]].height(Length::Fill).into();
         }
         let map: Element<'_, EditMsg> = match &self.ctl.map {

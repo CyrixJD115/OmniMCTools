@@ -43,6 +43,7 @@ mod viewer;
 mod viewer_ext;
 mod viewer_highlight;
 mod viewer_info;
+mod viewer_iso;
 mod viewer_inspect;
 mod viewer_presets;
 mod viewer_rules;

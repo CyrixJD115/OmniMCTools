@@ -55,7 +55,17 @@ impl std::fmt::Display for DimChoice {
 impl ViewerState {
     // ---------------------------------------------------------------- nav
     fn nav(&self, spawn: Option<(i32, i32)>) -> Element<'_, ViewerMsg> {
-        let mode = segmented(&[(false, "2D"), (true, "3D")], self.v3.on, ViewerMsg::Mode3D);
+        let cur = match (self.v3.on, self.v3.iso) {
+            (false, _) => 0u8,
+            (true, None) => 1,
+            (true, Some(_)) => 2,
+        };
+        let rot = self.v3.iso_cam.rot;
+        let mode = segmented(&[(0u8, "2D"), (1, "3D"), (2, "Iso")], cur, move |m| match m {
+            0 => ViewerMsg::Mode3D(false),
+            1 => ViewerMsg::Mode3D(true),
+            _ => ViewerMsg::Iso(Some(rot)),
+        });
         let dims = pick_list(
             Dimension::ALL.map(|d| DimChoice(d.id())),
             Some(DimChoice(self.ctl.dim)),
@@ -209,6 +219,13 @@ impl ViewerState {
 
     fn view_tab(&self) -> Element<'_, ViewerMsg> {
         let mut col = column![].spacing(8);
+        if let Some(rot) = self.v3.iso {
+            const ANGLES: [&str; 4] = ["North-west", "North-east", "South-east", "South-west"];
+            col = col.push(heading("ISOMETRIC VIEW"));
+            col = col.push(labeled("View angle", ANGLES[rot as usize % 4].to_string(), segmented(&[(0u8, "NW"), (1, "NE"), (2, "SE"), (3, "SW")], rot, |r| ViewerMsg::Iso(Some(r)))));
+            col = col.push(text(format!("Zoom: {:.2} px per block · drag to pan, wheel to zoom", self.v3.iso_cam.scale)).size(11).color(style::muted()));
+            return col.into();
+        }
         if !self.v3.on {
             let c = crate::mapconfig::config();
             col = col.push(heading("RENDERING"));
@@ -504,8 +521,9 @@ impl ViewerState {
                 iced::widget::container(iced::widget::canvas(crate::viewer_3d::Canvas3 {
                     frame: self.v3.frame.as_ref(),
                     crisp: self.v3.gpu && (self.prefs.render_scale - 1.0).abs() < 0.01,
-                    mouse_look: self.prefs.controls == crate::viewer_3d_input::Controls3::MouseLook,
+                    mouse_look: self.prefs.controls == crate::viewer_3d_input::Controls3::MouseLook && self.v3.iso.is_none(),
                     locked: self.v3.locked,
+                    iso: self.v3.iso.is_some(),
                     status, on_event: Box::new(ViewerMsg::Ev3) }).width(Length::Fill).height(Length::Fill)).clip(true).into()
             }
             Some(map) => crate::mapview::element(MapView { map, camera: self.ctl.camera, overlay: self.overlay(bookmarks, spawn), on_event: Box::new(ViewerMsg::Map) }),
@@ -515,7 +533,11 @@ impl ViewerState {
                 .into(),
         };
         let dim = Dimension::from_id(self.ctl.dim).map_or("?", Dimension::name);
-        let zoom = if self.v3.on { "3D".to_string() } else { format!("zoom {}", zoom_label(self.ctl.camera.zoom)) };
+        let zoom = match (self.v3.on, self.v3.iso) {
+            (true, Some(_)) => format!("isometric · {:.2} px/block", self.v3.iso_cam.scale),
+            (true, None) => "3D".to_string(),
+            _ => format!("zoom {}", zoom_label(self.ctl.camera.zoom)),
+        };
         let chip = container(
             row![
                 assets::icon(Icon::Map, 16.0),

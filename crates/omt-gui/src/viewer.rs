@@ -56,6 +56,8 @@ pub enum ViewerMsg {
     TexCell((i32, i32), u64, Option<iced::widget::image::Handle>),
     /// 3D terrain view on/off.
     Mode3D(bool),
+    /// Isometric view at a view angle (0..3); `None` = 2D map.
+    Iso(Option<u8>),
     Ev3(crate::viewer_3d::Ev3),
     Grid3(Arc<omt_render::voxel::Grid>, Option<crate::viewer_3d::GpuMesh>),
     Gpu3(bool),
@@ -331,13 +333,22 @@ impl ViewerState {
                         self.ctl.camera.cx = xz[0];
                         self.ctl.camera.cz = xz[1];
                     }
+                    if let Some(rot) = mode.strip_prefix("iso") {
+                        return Task::batch([t, self.set_iso(Some(rot.parse().unwrap_or(0)), store)]);
+                    }
                     let enter = self.set_3d(true, store);
                     let detail = if mode == "blocks" { self.set_detail(true, store) } else { Task::none() };
                     return Task::batch([t, enter, detail]);
                 }
                 t
             }
+            ViewerMsg::Mode3D(on) if on && self.v3.iso.is_some() => {
+                // Iso → perspective 3D: same grid, perspective camera.
+                self.v3.iso = None;
+                self.request_grid()
+            }
             ViewerMsg::Mode3D(on) => self.set_3d(on, store),
+            ViewerMsg::Iso(rot) => self.set_iso(rot, store),
             ViewerMsg::Ev3(e) => self.on_ev3(e, store),
             ViewerMsg::Grid3(g, m) => self.on_grid(g, m),
             ViewerMsg::Gpu3(on) => {

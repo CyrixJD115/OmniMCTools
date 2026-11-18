@@ -113,6 +113,9 @@ pub struct View3 {
     pub locked: bool,
     /// Last movement tick.
     pub last_tick: Option<std::time::Instant>,
+    /// Isometric mode: view angle (0..3); `None` = perspective 3D.
+    pub iso: Option<u8>,
+    pub iso_cam: omt_render::iso::IsoCam,
 }
 
 /// A GPU block mesh (messages need `Debug`).
@@ -185,6 +188,8 @@ pub struct Canvas3<'a, M> {
     pub mouse_look: bool,
     /// The mouse is captured.
     pub locked: bool,
+    /// Isometric mode (drag pans, wheel zooms).
+    pub iso: bool,
     pub status: String,
     pub on_event: Box<dyn Fn(Ev3) -> M + 'a>,
 }
@@ -320,7 +325,9 @@ impl<M> canvas::Program<M> for Canvas3<'_, M> {
             f.draw_image(Rectangle::new(Point::ORIGIN, size), img);
         }
         let keys = "W A S D move · Space / Shift up / down · Ctrl faster";
-        let hint = if self.locked {
+        let hint = if self.iso {
+            "Drag: pan · Wheel: zoom · view angle in Render settings".to_string()
+        } else if self.locked {
             format!("Mouse captured — move to look · {keys} · wheel: speed · Esc: release")
         } else if self.mouse_look {
             format!("Click to capture the mouse · {keys}")

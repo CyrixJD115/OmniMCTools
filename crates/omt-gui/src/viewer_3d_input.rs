@@ -152,6 +152,9 @@ impl ViewerState {
         // Old feel for drag-moving and the wheel: faster when high up.
         let above = (self.v3.cam.y - self.ground().max(-100.0)).max(16.0);
         let speed = (above / 160.0) as f64;
+        if let Some(t) = self.iso_input(&e, store) {
+            return t;
+        }
         match e {
             Ev3::Look { dx, dy } => self.turn(dx, dy, DRAG_LOOK),
             Ev3::Move { dx, dy } => self.v3.cam.walk(dy as f64 * speed * 2.0, -dx as f64 * speed * 2.0),

@@ -20,6 +20,7 @@ impl ViewerState {
         }
         self.v3.on = on;
         if !on {
+            self.v3.iso = None;
             self.capture(false);
             self.v3.grid = None;
             self.v3.frame = None;
@@ -67,8 +68,10 @@ impl ViewerState {
             return Task::none();
         }
         self.v3.building = true;
-        let (cx, cz, r) = (self.v3.cam.x, self.v3.cam.z, self.v3.cam.far as f64);
-        let use_gpu = self.v3.gpu;
+        let (cx, cz) = (self.v3.cam.x, self.v3.cam.z);
+        let r = if self.v3.iso.is_some() { self.iso_radius() } else { self.v3.cam.far as f64 };
+        // Isometric frames are drawn on the CPU: no GPU mesh needed.
+        let use_gpu = self.v3.gpu && self.v3.iso.is_none();
         Task::perform(
             blocking(move || {
                 let gpu = if use_gpu { omt_gpu::gpu() } else { None };
@@ -173,6 +176,14 @@ impl ViewerState {
         let cam = self.v3.cam;
         type Job = Box<dyn FnOnce() -> Handle + Send>;
         type GpuJob = Box<dyn FnOnce(&omt_gpu::Gpu) -> Vec<u8> + Send>;
+        if self.v3.iso.is_some() {
+            let Some(job) = self.iso_frame(sky.1) else { return Task::none() };
+            self.v3.rendering = true;
+            return Task::perform(blocking(job), |h| h).then(|h: Handle| {
+                let shown = h.clone();
+                iced::widget::image::allocate(h).map(move |a| ViewerMsg::Frame3(shown.clone(), a.ok()))
+            });
+        }
         let gpu_frame = |f: GpuJob, w: u32, h: u32| -> Job {
             Box::new(move || match omt_gpu::gpu() {
                 Some(g) => Handle::from_rgba(w, h, f(&g)),

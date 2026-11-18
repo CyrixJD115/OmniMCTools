@@ -9,6 +9,7 @@
 pub mod area;
 pub mod blocks3d;
 pub mod finder;
+pub mod iso;
 pub mod map;
 pub mod markers;
 pub mod palette;
