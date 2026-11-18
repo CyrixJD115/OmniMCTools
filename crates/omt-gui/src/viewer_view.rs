@@ -205,6 +205,14 @@ impl ViewerState {
         }
         if !self.v3.on {
             let c = crate::mapconfig::config();
+            if self.v3.iso.is_some() {
+                // Isometric: view angle + detail (flat map colors or the
+                // blocks' own textures).
+                col = col.push(heading("RENDERING"));
+                col = col.push(labeled("Detail", String::new(), segmented(&[(false, "Colors (fast)"), (true, "Textured")], self.v3.iso_textured, ViewerMsg::IsoTextured)));
+                col = col.push(text(if self.v3.iso_textured { "Block textures from the resource pack, shaded per face." } else { "One map color per column — the fast mode." }).size(11).color(style::muted()));
+                return col.into();
+            }
             col = col.push(heading("RENDERING"));
             col = col.push(labeled("Quality", String::new(), pick_list(MapQuality::ALL.to_vec(), Some(c.quality), move |q| ViewerMsg::MapUi(crate::mapdata::MapUiMsg::Quality(q))).text_size(12).width(Length::Fill).into()));
             col = col.push(labeled("Detail bias", String::new(), pick_list(crate::mapconfig::DetailBias::ALL.to_vec(), Some(crate::mapconfig::DetailBias(c.detail_bias)), move |d: crate::mapconfig::DetailBias| ViewerMsg::MapUi(crate::mapdata::MapUiMsg::Detail(d.0))).text_size(12).width(Length::Fill).into()));
@@ -484,6 +492,7 @@ impl ViewerState {
                 };
                 iced::widget::container(iced::widget::canvas(crate::viewer_3d::Canvas3 {
                     frame: self.v3.frame.as_ref(),
+                    iso_pan: self.v3.iso_pan,
                     crisp: self.v3.gpu && (self.prefs.render_scale - 1.0).abs() < 0.01,
                     mouse_look: self.prefs.controls == crate::viewer_3d_input::Controls3::MouseLook && self.v3.iso.is_none(),
                     locked: self.v3.locked,

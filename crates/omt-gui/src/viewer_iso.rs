@@ -23,6 +23,7 @@ impl ViewerState {
         let entering = self.v3.iso.is_none();
         self.v3.iso = Some(rot % 4);
         self.v3.iso_cam.rot = rot % 4;
+        self.v3.iso_pan = (0.0, 0.0);
         if entering {
             let (cx, cz) = if self.v3.on { (self.v3.cam.x, self.v3.cam.z) } else { (self.ctl.camera.cx, self.ctl.camera.cz) };
             self.v3.iso_cam.x = cx;
@@ -50,20 +51,44 @@ impl ViewerState {
     /// Mouse / wheel input in iso mode (`None` = not in iso mode).
     pub(crate) fn iso_input(&mut self, e: &Ev3, store: Option<&Store>) -> Option<Task<ViewerMsg>> {
         self.v3.iso?;
+        // Pan-then-blit: during a drag the camera moves and the shown frame
+        // is drawn shifted by the accumulated drag (zero re-render cost per
+        // event); full renders run on release / zoom / big offsets only.
         match *e {
             Ev3::Look { dx, dy } | Ev3::Move { dx, dy } => {
                 self.v3.iso_cam.pan(dx, dy);
+                self.v3.iso_pan.0 += dx;
+                self.v3.iso_pan.1 += dy;
+            }
+            Ev3::End => {
+                self.sync_iso();
+                return Some(self.regrid_if_needed(store));
             }
             Ev3::Altitude(y) => {
                 let f = if y > 0.0 { 1.25 } else { 0.8 };
                 self.v3.iso_cam.scale = (self.v3.iso_cam.scale * f).clamp(MIN_SCALE, MAX_SCALE);
+                self.v3.iso_pan = (0.0, 0.0);
+                self.sync_iso();
+                return Some(self.regrid_if_needed(store));
             }
             Ev3::Resize(_) => return None,
             _ => return Some(Task::none()),
         }
         self.sync_iso();
-        // Rebuild the grid when the view leaves the built area or the zoom
-        // changed the needed extent a lot.
+        // Mid-drag, re-render only when the shifted frame would run out of
+        // image (the far edge would expose sky).
+        let (w, h) = self.v3.size;
+        let limit = w.min(h).max(1) as f32 * 0.45;
+        if self.v3.iso_pan.0.abs() > limit || self.v3.iso_pan.1.abs() > limit {
+            self.v3.iso_pan = (0.0, 0.0);
+            return Some(self.regrid_if_needed(store));
+        }
+        Some(Task::none())
+    }
+
+    /// Rebuild the grid when the view leaves the built area or the zoom
+    /// changed the needed extent a lot, then render a frame.
+    fn regrid_if_needed(&mut self, store: Option<&Store>) -> Task<ViewerMsg> {
         let need = self.iso_radius();
         let regrid = match &self.v3.grid {
             Some(g) => {
@@ -74,7 +99,7 @@ impl ViewerState {
             None => true,
         };
         let grid = if regrid { self.recenter_3d(store) } else { Task::none() };
-        Some(Task::batch([grid, self.request_frame()]))
+        Task::batch([grid, self.request_frame()])
     }
 
     /// An iso frame job for the current grid.
@@ -83,6 +108,14 @@ impl ViewerState {
         let grid = self.v3.grid.clone()?;
         let (w, h) = self.render_px(1.0);
         let cam: IsoCam = self.v3.iso_cam;
-        Some(Box::new(move || iced::widget::image::Handle::from_rgba(w, h, omt_render::iso::render(&grid, &cam, w as usize, h as usize, sky))))
+        let textured = self.v3.iso_textured && !grid.kinds.is_empty();
+        Some(Box::new(move || {
+            let img = if textured {
+                omt_render::iso::render_textured(&grid, &cam, w as usize, h as usize, sky)
+            } else {
+                omt_render::iso::render(&grid, &cam, w as usize, h as usize, sky)
+            };
+            iced::widget::image::Handle::from_rgba(w, h, img)
+        }))
     }
 }

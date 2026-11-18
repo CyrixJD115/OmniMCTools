@@ -253,10 +253,10 @@ mod tests {
     use super::*;
 
     fn pillar_grid() -> Grid {
-        let f = |x: f64, z: f64| -> Option<(f32, [u8; 3])> {
-            if x.abs() < 6.0 && (z + 50.0).abs() < 6.0 { Some((150.0, [200, 30, 30])) } else { Some((60.0, [40, 160, 40])) }
+        let f = |x: f64, z: f64| -> Option<(f32, [u8; 3], u16)> {
+            if x.abs() < 6.0 && (z + 50.0).abs() < 6.0 { Some((150.0, [200, 30, 30], omt_render::voxel::NO_KIND)) } else { Some((60.0, [40, 160, 40], omt_render::voxel::NO_KIND)) }
         };
-        Grid::build(0.0, 0.0, 128.0, 128, &f)
+        Grid::build(0.0, 0.0, 128.0, 128, Vec::new(), &f)
     }
 
     #[test]

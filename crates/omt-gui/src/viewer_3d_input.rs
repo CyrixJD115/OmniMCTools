@@ -174,6 +174,7 @@ impl ViewerState {
                 self.v3.held.set(k, false);
                 return Task::none();
             }
+            Ev3::End => return Task::none(),
             Ev3::Capture(on) => {
                 self.capture(on);
                 return Task::none();

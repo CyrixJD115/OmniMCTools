@@ -172,6 +172,7 @@ impl EditorState {
             p.target[2] += -c * fwd + s * right;
         };
         match e {
+            Ev3::End => {}
             Ev3::Look { dx, dy } => {
                 p.yaw += dx * 0.01;
                 // Orbit: dragging up looks up (lowers the orbit), like the viewer.
