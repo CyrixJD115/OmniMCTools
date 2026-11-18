@@ -199,7 +199,7 @@ impl ViewerState {
             button(assets::glyph(Glyph::Close, style::hint(), 10.0)).padding(4).on_press(ViewerMsg::Panel(None)).style(style::button_style(Btn::Ghost)),
         ]
         .align_y(Alignment::Center);
-        container(column![head, scrollable(column![body].width(Length::Fill)).height(Length::Fill)].spacing(8))
+        container(column![head, scrollable(column![body].width(Length::Fill).padding(iced::Padding { right: 12.0, ..iced::Padding::ZERO })).height(Length::Fill)].spacing(8))
             .padding([8, 10])
             .width(262)
             .height(Length::Fill)

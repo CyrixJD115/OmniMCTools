@@ -73,6 +73,9 @@ pub fn level_info(store: &Store, summary: &omt_world::detect::WorldSummary) -> L
     let num = |k: &str| get(k).and_then(Tag::as_i64);
     if java {
         f.push(("Edition".into(), "Java Edition".into()));
+        if num("DataVersion").is_none() && get("Version").is_none() {
+            f.push(("Format".into(), "pre-1.9 (no DataVersion; Anvil or McRegion)".into()));
+        }
         if let Some(v) = get("Version").and_then(|v| v.get("Name")).and_then(Tag::as_str) {
             f.push(("Minecraft version".into(), v.to_string()));
         }
@@ -215,6 +218,7 @@ pub enum Lists {
     Biomes,
     Blocks,
     Entities,
+    Registry,
 }
 
 /// Search boxes + player selection of the list tabs.
@@ -224,6 +228,7 @@ pub struct ListState {
     pub biomes: String,
     pub blocks: String,
     pub entities: String,
+    pub registry: String,
     pub selected: Option<usize>,
     pub name_draft: String,
 }
@@ -235,6 +240,7 @@ impl ListState {
             Lists::Biomes => &self.biomes,
             Lists::Blocks => &self.blocks,
             Lists::Entities => &self.entities,
+            Lists::Registry => &self.registry,
         }
     }
     pub fn set(&mut self, l: Lists, s: String) {
@@ -243,6 +249,7 @@ impl ListState {
             Lists::Biomes => self.biomes = s,
             Lists::Blocks => self.blocks = s,
             Lists::Entities => self.entities = s,
+            Lists::Registry => self.registry = s,
         }
     }
 }
@@ -340,6 +347,43 @@ pub fn entities_tab<'a, M: Clone + 'a>(ents: &'a Arc<Vec<omt_render::markers::En
     for e in matching.into_iter().take(400) {
         let line = panelui::two_line(e.id.trim_start_matches("minecraft:").to_string(), format!("{:.0}, {:.0}", e.x, e.z));
         col = col.push(panelui::item(line, false, on(ListMsg::GoTo(dim, e.x, e.z))));
+    }
+    col.into()
+}
+
+/// The **Registry** tab: every block and biome OMT knows (map colour,
+/// tint kind; biome tints), searchable; click copies the id.
+pub fn registry_tab<'a, M: Clone + 'a>(st: &'a ListState, on: impl Fn(ListMsg) -> M + Clone + 'a) -> Element<'a, M> {
+    let pal = omt_render::Palette::embedded();
+    let o = on.clone();
+    let blocks = pal.block_entries();
+    let biomes = pal.biome_entries();
+    let q = &st.registry;
+    let mut col = column![search("Search blocks and biomes", q, move |s| o(ListMsg::Search(Lists::Registry, s))), note(format!("{} blocks · {} biomes (vanilla colour table) — click to copy the id", blocks.len(), biomes.len()))].spacing(4);
+    let rgb = |c: u32| [(c >> 16) as u8, (c >> 8) as u8, c as u8];
+    col = col.push(heading("BIOMES (map colour · grass · foliage · water)"));
+    for (name, b) in biomes.iter().filter(|(n, _)| hit(q, n)).take(120) {
+        let line = row![
+            panelui::swatch(omt_render::style::biome_color(name)),
+            text(name.trim_start_matches("minecraft:").to_string()).size(12).width(Length::Fill),
+            panelui::swatch(rgb(b.grass)),
+            panelui::swatch(rgb(b.foliage)),
+            panelui::swatch(rgb(b.water)),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
+        col = col.push(panelui::item(line, false, on(ListMsg::Copy(name.to_string()))));
+    }
+    col = col.push(heading("BLOCKS"));
+    for (name, c) in blocks.iter().filter(|(n, _)| hit(q, n)).take(250) {
+        let tint = match c.tint {
+            omt_render::Tint::None => "",
+            omt_render::Tint::Grass => "grass tint",
+            omt_render::Tint::Foliage => "foliage tint",
+            omt_render::Tint::Water => "water tint",
+        };
+        let line = row![panelui::swatch([c.rgba[0], c.rgba[1], c.rgba[2]]), text(name.trim_start_matches("minecraft:").to_string()).size(12).width(Length::Fill), text(tint).size(10).color(style::muted())].spacing(6).align_y(Alignment::Center);
+        col = col.push(panelui::item(line, false, on(ListMsg::Copy(name.to_string()))));
     }
     col.into()
 }

@@ -146,6 +146,20 @@ impl Palette {
         self.blocks.get(&mapped.state.name).copied().unwrap_or(BlockColor::UNKNOWN)
     }
 
+    /// Every block of the colour table (registry view), sorted by name.
+    pub fn block_entries(&self) -> Vec<(&str, BlockColor)> {
+        let mut v: Vec<(&str, BlockColor)> = self.blocks.iter().map(|(k, c)| (k.as_str(), *c)).collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        v
+    }
+
+    /// Every biome with its tints (registry view), sorted by name.
+    pub fn biome_entries(&self) -> Vec<(&str, BiomeColors)> {
+        let mut v: Vec<(&str, BiomeColors)> = self.biomes.iter().map(|(k, c)| (k.as_str(), *c)).collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        v
+    }
+
     pub fn biome(&self, java_name: &str) -> BiomeColors {
         self.biomes.get(java_name).copied().unwrap_or(BiomeColors::DEFAULT)
     }

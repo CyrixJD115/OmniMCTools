@@ -32,6 +32,8 @@ pub enum PanelTab {
     Stylesheet,
     /// Saved map settings.
     Presets,
+    /// Block + biome registry (colours, tints).
+    Registry,
     /// 2D/3D and rendering quality.
     View,
     /// Map style + sun lighting + biome legend.
@@ -45,8 +47,8 @@ pub enum PanelTab {
 }
 
 impl PanelTab {
-    pub const ALL: [PanelTab; 15] = [
-        Self::Info, Self::Inspect, Self::Players, Self::Biomes, Self::Blocks, Self::Entities, Self::View, Self::Style, Self::Stylesheet, Self::Filter, Self::Highlight, Self::Layers, Self::Find, Self::Presets, Self::Export,
+    pub const ALL: [PanelTab; 16] = [
+        Self::Info, Self::Inspect, Self::Players, Self::Biomes, Self::Blocks, Self::Entities, Self::View, Self::Style, Self::Stylesheet, Self::Filter, Self::Highlight, Self::Layers, Self::Find, Self::Registry, Self::Presets, Self::Export,
     ];
 
     /// Monochrome glyph for the panel's icon strip (matches the rail).
@@ -62,6 +64,7 @@ impl PanelTab {
             Self::Highlight => omt_art::Glyph::Highlight,
             Self::Stylesheet => omt_art::Glyph::Palette,
             Self::Presets => omt_art::Glyph::Save,
+            Self::Registry => omt_art::Glyph::List,
             Self::View => omt_art::Glyph::Eye,
             Self::Style => omt_art::Glyph::Contrast,
             Self::Layers => omt_art::Glyph::Layers,
@@ -82,6 +85,7 @@ impl PanelTab {
             Self::Highlight => "Highlighters",
             Self::Stylesheet => "Stylesheet",
             Self::Presets => "Saved map settings",
+            Self::Registry => "Registry",
             Self::View => "Render settings",
             Self::Style => "Map style",
             Self::Layers => "Layers",

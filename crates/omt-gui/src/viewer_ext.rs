@@ -501,6 +501,7 @@ impl ViewerState {
             PanelTab::Filter => crate::viewer_rules::filter_tab(&self.prefs.rules, &self.ext.rules_draft, |m| ext(ExtMsg::Rules(m))),
             PanelTab::Stylesheet => crate::viewer_rules::stylesheet_tab(&self.prefs.rules, &self.ext.rules_draft, |m| ext(ExtMsg::Rules(m))),
             PanelTab::Highlight => crate::viewer_highlight::tab(&self.prefs.highlights, &self.ext.hl, self.bedrock, |m| ext(ExtMsg::Hl(m))),
+            PanelTab::Registry => crate::viewer_info::registry_tab(&self.ext.lists, list),
             PanelTab::Presets => crate::viewer_presets::tab(&self.prefs, &self.ext.preset_draft, |m| ext(ExtMsg::Preset(m))),
             _ => return None,
         })
