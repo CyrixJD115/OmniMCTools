@@ -259,7 +259,7 @@ impl Preset {
 pub fn is_natural(name: &str) -> bool {
     let id = name.split_once(':').map_or(name, |(_, i)| i);
     const EXACT: &[&str] = &[
-        "stone", "granite", "diorite", "andesite", "deepslate", "tuff", "calcite", "bedrock", "netherrack", "basalt", "smooth_basalt", "blackstone", "end_stone", "obsidian", "crying_obsidian", "sandstone", "red_sandstone", "dirt", "coarse_dirt",
+        "stone", "cobblestone", "infested_stone", "infested_deepslate", "grimstone", "prismarine", "dark_prismarine", "granite", "diorite", "andesite", "deepslate", "tuff", "calcite", "bedrock", "netherrack", "basalt", "smooth_basalt", "blackstone", "end_stone", "obsidian", "crying_obsidian", "sandstone", "red_sandstone", "dirt", "coarse_dirt",
         "rooted_dirt", "grass_block", "grass", "podzol", "mycelium", "dirt_path", "grass_path", "sand", "red_sand", "suspicious_sand", "gravel", "suspicious_gravel", "clay", "mud", "moss_block", "moss_carpet", "pale_moss_block", "pale_moss_carpet",
         "pale_hanging_moss", "soul_sand", "soul_soil", "magma", "magma_block", "terracotta", "hardened_clay", "stained_hardened_clay", "dripstone_block", "pointed_dripstone", "amethyst_block", "budding_amethyst", "amethyst_cluster", "fire",
         "soul_fire", "crimson_nylium", "warped_nylium", "nether_wart_block", "warped_wart_block", "glow_lichen", "sculk", "sculk_vein", "bone_block", "sea_pickle", "hanging_roots", "packed_mud", "snow", "powder_snow",
@@ -420,6 +420,8 @@ mod tests {
         assert!(matches("@natural", "minecraft:deepslate_iron_ore") && matches("@natural", "minecraft:oak_leaves") && matches("@natural", "minecraft:water"));
         assert!(matches("@artificial", "minecraft:oak_planks") && matches("@artificial", "minecraft:red_wool") && !matches("@artificial", "minecraft:air"));
         assert!(!matches("@natural", "minecraft:stone_bricks") && !matches("@natural", "minecraft:white_glazed_terracotta"));
+        // uNmINeD counts cobblestone as natural ground; its slabs/stairs are masonry.
+        assert!(matches("@natural", "minecraft:cobblestone") && !matches("@natural", "minecraft:cobblestone_stairs"));
         // uNmINeD presets: seagrass + kelp, technical blocks.
         assert!(Preset::Seagrass.patterns().iter().any(|p| matches(p, "minecraft:kelp_plant")));
         assert!(Preset::Technical.patterns().iter().any(|p| matches(p, "minecraft:chain_command_block")));
