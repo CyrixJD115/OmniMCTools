@@ -42,12 +42,6 @@ fn segmented<'a, T: Copy + PartialEq + 'a>(items: &[(T, &'a str)], current: T, f
         .into()
 }
 
-/// A square icon button of the tool rail (`on` lights it up).
-fn rail_btn<'a>(content: impl Into<Element<'a, ViewerMsg>>, tip_label: &str, on: bool, msg: ViewerMsg, side: tooltip::Position) -> Element<'a, ViewerMsg> {
-    let b = button(container(content.into()).width(22).align_x(Alignment::Center).align_y(Alignment::Center)).padding(5).width(34).on_press(msg).style(style::button_style(if on { Btn::ChipOn } else { Btn::Ghost }));
-    tip(b, tip_label.to_string(), side)
-}
-
 /// A dimension value for the nav pick list (shows its name).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DimChoice(u8);
@@ -135,52 +129,86 @@ impl ViewerState {
     fn tool_rail(&self) -> Element<'_, ViewerMsg> {
         let p = &self.prefs;
         let chunk_on = p.chunk_grid == Some(true);
-        let zoom_row = [
-            ("+", "Zoom in", ViewerMsg::Zoom(2.0), false),
-            ("−", "Zoom out", ViewerMsg::Zoom(0.5), false),
-            ("⛶", "Fit world", ViewerMsg::Fit, false),
-        ];
+        let right = tooltip::Position::Right;
         let pins = [
             (Icon::Spawn, "World spawn pin", p.spawn, ViewerMsg::Layer(Layer::Spawn, !p.spawn)),
             (Icon::Player, "Player markers", p.players, ViewerMsg::Layer(Layer::Players, !p.players)),
             (Icon::Bookmark, "Bookmarks", p.bookmarks, ViewerMsg::Layer(Layer::Bookmarks, !p.bookmarks)),
         ];
-        let mut col = column![].spacing(2);
-        for (label, t, msg, on) in zoom_row {
-            col = col.push(rail_btn(text(label).size(14).center(), t, on, msg, tooltip::Position::Right));
-        }
-        col = col.push(container(iced::widget::rule::horizontal(1)).width(26));
+        let mut col: Vec<Element<'_, ViewerMsg>> = vec![
+            crate::maprail::button(crate::maprail::glyph("+"), "Zoom in", false, ViewerMsg::Zoom(2.0), right),
+            crate::maprail::button(crate::maprail::glyph("−"), "Zoom out", false, ViewerMsg::Zoom(0.5), right),
+            crate::maprail::button(crate::maprail::glyph("⛶"), "Fit world", false, ViewerMsg::Fit, right),
+            crate::maprail::separator(),
+        ];
         for (icon, t, on, msg) in pins {
-            col = col.push(rail_btn(assets::icon(icon, 15.0), t, on, msg, tooltip::Position::Right));
+            col.push(crate::maprail::button(assets::icon(icon, 15.0), t, on, msg, right));
         }
-        col = col.push(rail_btn(text("E").size(12).font(style::BOLD).center(), format!("Entities ({})", self.entities.len()).as_str(), p.entities, ViewerMsg::Layer(Layer::Entities, !p.entities), tooltip::Position::Right));
-        col = col.push(container(iced::widget::rule::horizontal(1)).width(26));
-        col = col.push(rail_btn(assets::glyph(Glyph::Grid, style::fg(), 13.0), match p.chunk_grid { None => "Chunk grid: auto (Ctrl+G)", Some(true) => "Chunk grid: on (Ctrl+G)", Some(false) => "Chunk grid: off (Ctrl+G)" }, chunk_on, ViewerMsg::CycleChunkGrid, tooltip::Position::Right));
-        col = col.push(rail_btn(text("⊞").size(12).center(), "Region grid (32×32 chunks)", p.region_grid, ViewerMsg::Layer(Layer::RegionGrid, !p.region_grid), tooltip::Position::Right));
-        col = col.push(rail_btn(text("S").size(12).font(style::BOLD).center(), if !self.bedrock && self.seed.is_none() { "Slime chunks (seed unknown)" } else { "Slime chunks" }, p.slime, ViewerMsg::Layer(Layer::Slime, !p.slime), tooltip::Position::Right));
-        col = col.push(container(iced::widget::rule::horizontal(1)).width(26));
-        col = col.push(rail_btn(text("C").size(12).font(style::BOLD).center(), "Underground (caves)", self.cave, ViewerMsg::Cave(!self.cave), tooltip::Position::Right));
-        col = col.push(rail_btn(text("X").size(12).font(style::BOLD).center(), "Slicer (hide blocks above Y)", self.slicer.is_some(), ViewerMsg::Slicer(self.slicer.is_none()), tooltip::Position::Right));
-        col = col.push(rail_btn(text("T").size(12).font(style::BOLD).center(), if crate::textures::current().is_some() { "Block textures when zoomed in" } else { "Block textures (no pack — see Settings)" }, p.textured, ViewerMsg::Layer(Layer::Textures, !p.textured), tooltip::Position::Right));
-        col = col.push(rail_btn(text("✛").size(12).center(), "Scale bar & compass", p.hud, ViewerMsg::Layer(Layer::Hud, !p.hud), tooltip::Position::Right));
-        container(scrollable(col).width(Length::Shrink)).padding([4, 0]).width(38).height(Length::Fill).style(style::rail()).into()
+        col.push(crate::maprail::button(
+            crate::maprail::letter("E"),
+            format!("Entities ({})", self.entities.len()),
+            p.entities,
+            ViewerMsg::Layer(Layer::Entities, !p.entities),
+            right,
+        ));
+        col.push(crate::maprail::separator());
+        col.push(crate::maprail::button(
+            assets::glyph(Glyph::Grid, style::fg(), 13.0),
+            match p.chunk_grid {
+                None => "Chunk grid: auto (Ctrl+G)",
+                Some(true) => "Chunk grid: on (Ctrl+G)",
+                Some(false) => "Chunk grid: off (Ctrl+G)",
+            },
+            chunk_on,
+            ViewerMsg::CycleChunkGrid,
+            right,
+        ));
+        col.push(crate::maprail::button(crate::maprail::glyph("⊞"), "Region grid (32×32 chunks)", p.region_grid, ViewerMsg::Layer(Layer::RegionGrid, !p.region_grid), right));
+        col.push(crate::maprail::button(
+            crate::maprail::letter("S"),
+            if !self.bedrock && self.seed.is_none() { "Slime chunks (seed unknown)" } else { "Slime chunks" },
+            p.slime,
+            ViewerMsg::Layer(Layer::Slime, !p.slime),
+            right,
+        ));
+        col.push(crate::maprail::separator());
+        col.push(crate::maprail::button(crate::maprail::letter("C"), "Underground (caves)", self.cave, ViewerMsg::Cave(!self.cave), right));
+        col.push(crate::maprail::button(crate::maprail::letter("X"), "Slicer (hide blocks above Y)", self.slicer.is_some(), ViewerMsg::Slicer(self.slicer.is_none()), right));
+        col.push(crate::maprail::button(
+            crate::maprail::letter("T"),
+            if crate::textures::current().is_some() { "Block textures when zoomed in" } else { "Block textures (no pack — see Settings)" },
+            p.textured,
+            ViewerMsg::Layer(Layer::Textures, !p.textured),
+            right,
+        ));
+        col.push(crate::maprail::button(crate::maprail::glyph("✛"), "Scale bar & compass", p.hud, ViewerMsg::Layer(Layer::Hud, !p.hud), right));
+        crate::maprail::strip(col)
     }
 
     // -------------------------------------------------------- side panel
     fn panel_tab_strip(&self) -> Element<'_, ViewerMsg> {
-        let mut col = column![].spacing(2);
-        for tab in PanelTab::ALL {
-            let on = self.prefs.panel() == Some(tab);
-            col = col.push(rail_btn(assets::icon(tab.icon(), 15.0), tab.name(), on, ViewerMsg::Panel(Some(tab)), tooltip::Position::Left));
-        }
+        let left = tooltip::Position::Left;
+        let mut col: Vec<Element<'_, ViewerMsg>> = PanelTab::ALL
+            .iter()
+            .map(|&tab| {
+                let on = self.prefs.panel() == Some(tab);
+                crate::maprail::button(assets::icon(tab.icon(), 15.0), tab.name(), on, ViewerMsg::Panel(Some(tab)), left)
+            })
+            .collect();
         let (glyph, tip_label, msg) = if self.prefs.panel().is_some() {
             (Glyph::ChevronRight, "Collapse panel", ViewerMsg::Panel(None))
         } else {
             (Glyph::ChevronLeft, "Expand panel", ViewerMsg::Panel(Some(PanelTab::View)))
         };
-        col = col.push(container(iced::widget::rule::horizontal(1)).width(26));
-        col = col.push(rail_btn(assets::glyph(glyph, style::fg(), 13.0), tip_label, false, msg, tooltip::Position::Left));
-        container(col).padding([4, 0]).width(38).height(Length::Fill).style(style::rail()).into()
+        col.push(crate::maprail::separator());
+        col.push(crate::maprail::button(assets::glyph(glyph, style::fg(), 13.0), tip_label, false, msg, left));
+        container(column(col).spacing(2).width(32).align_x(Alignment::Center))
+            .padding([4, 0])
+            .width(38)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .style(style::rail())
+            .into()
     }
 
     fn panel<'a>(&'a self, bookmarks: &'a [Bookmark]) -> Element<'a, ViewerMsg> {

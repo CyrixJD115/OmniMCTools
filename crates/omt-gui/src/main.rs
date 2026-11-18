@@ -23,6 +23,7 @@ mod locator;
 mod mapconfig;
 mod mapdata;
 mod maplook;
+mod maprail;
 mod maptile;
 mod mapview;
 mod mapview_overlay;

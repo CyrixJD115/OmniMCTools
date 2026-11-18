@@ -700,19 +700,17 @@ impl PrunerState {
         .into()
     }
 
-    /// Photoshop-style tool rail docked left of the map.
+    /// Photoshop-style tool rail docked left of the map (shared geometry
+    /// with the Map Viewer's rail — `maprail`).
     fn tool_rail(&self) -> Element<'_, PrunerMsg> {
-        let rail = |label: &'static str, tip_label: &'static str, active: bool, msg: PrunerMsg| {
-            let b = button(container(text(label).size(13).center()).width(22).align_x(iced::Alignment::Center).align_y(iced::Alignment::Center)).padding(5).width(36).on_press(msg).style(style::button_style(if active { Btn::ChipOn } else { Btn::Ghost }));
-            tooltip(b, container(text(tip_label).size(12)).padding([4, 8]).style(style::card()), tooltip::Position::Right)
-        };
-        let mut col = column![].spacing(2);
-        for t in Tool::ALL {
-            col = col.push(rail(t.rail_glyph(), t.hint(), self.tool == t, PrunerMsg::Tool(t)));
-        }
-        col = col.push(container(iced::widget::rule::horizontal(1)).width(28));
-        col = col.push(rail("⏱", "Time: select chunks by InhabitedTime", self.time_open, PrunerMsg::ToggleTime));
-        container(col).padding([4, 0]).width(40).height(Length::Fill).style(style::rail()).into()
+        let right = tooltip::Position::Right;
+        let mut col: Vec<Element<'_, PrunerMsg>> = Tool::ALL
+            .iter()
+            .map(|&t| crate::maprail::button(crate::maprail::glyph(t.rail_glyph()), t.hint(), self.tool == t, PrunerMsg::Tool(t), right))
+            .collect();
+        col.push(crate::maprail::separator());
+        col.push(crate::maprail::button(crate::maprail::glyph("⏱"), "Time: select chunks by InhabitedTime", self.time_open, PrunerMsg::ToggleTime, right));
+        crate::maprail::strip(col)
     }
 }
 
