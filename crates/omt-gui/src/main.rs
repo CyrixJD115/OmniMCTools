@@ -147,6 +147,8 @@ pub enum Message {
     HotkeyUndo,
     HotkeyRedo,
     HotkeySave,
+    /// Map Viewer keyboard navigation (arrows pan, +/− zoom, * reset, Ctrl+G).
+    ViewerKey(crate::viewer::ViewerKey),
 }
 
 enum Ui {
@@ -489,6 +491,14 @@ impl OmniMCTools {
                 }
             }
             Message::View(i, m) => {
+                // "Open in <tool>" from the viewer's Tools menu becomes a
+                // regular world open (before the viewer borrows anything).
+                if let ViewerMsg::OpenIn(app) = &m {
+                    if let Some(origin) = self.sessions.get(i).and_then(|t| t.sess.as_ref()).map(|s| s.origin()) {
+                        return self.update(Message::OpenWorld(*app, origin));
+                    }
+                    return Task::none();
+                }
                 if let ViewerMsg::MapUi(u) = &m {
                     self.apply_map_ui(*u);
                 }
@@ -537,6 +547,15 @@ impl OmniMCTools {
             }
             Message::CloseSession(i) => return self.close_session(i),
             Message::FocusSearch => return iced::widget::operation::focus(editor_view::search_id()),
+            Message::ViewerKey(k) => {
+                // Only the viewer session on screen reacts (uNmINeD-style
+                // map navigation: arrows pan, +/− zoom, * resets, Ctrl+G).
+                if let Page::Session(i) = self.screen
+                    && matches!(self.sessions.get(i).map(|t| &t.ui), Some(Ui::Viewer(_)))
+                {
+                    return self.update(Message::View(i, crate::viewer::ViewerMsg::Key(k)));
+                }
+            }
             Message::HotkeyUndo | Message::HotkeyRedo | Message::HotkeySave => {
                 let em = match message {
                     Message::HotkeyUndo => EditorMsg::Undo,

@@ -19,6 +19,70 @@ use crate::mapdata::{MapController, MapMsg};
 use crate::mapview::MapEvent;
 use crate::session::{Store, WorldSession, blocking};
 
+/// The side panel's tab (`None` = collapsed to the icon strip).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PanelTab {
+    /// 2D/3D and rendering quality.
+    View,
+    /// Map style + sun lighting + biome legend.
+    Style,
+    /// Grids, rulers and markers.
+    Layers,
+    /// Go-to, copy coordinates, bookmarks.
+    Find,
+    /// PNG export.
+    Export,
+}
+
+impl PanelTab {
+    pub const ALL: [PanelTab; 5] = [Self::View, Self::Style, Self::Layers, Self::Find, Self::Export];
+
+    pub const fn icon(self) -> omt_art::Icon {
+        match self {
+            Self::View => omt_art::Icon::Map,
+            Self::Style => omt_art::Icon::Lighting,
+            Self::Layers => omt_art::Icon::Layers,
+            Self::Find => omt_art::Icon::Bookmark,
+            Self::Export => omt_art::Icon::Archive,
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::View => "View",
+            Self::Style => "Style",
+            Self::Layers => "Layers",
+            Self::Find => "Find",
+            Self::Export => "Export",
+        }
+    }
+}
+
+/// Keyboard navigation (uNmINeD-style shortcuts, applied to the viewer
+/// session on screen; see `handlers::handle_hotkey`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewerKey {
+    /// Pan by blocks: arrows 16, Shift+arrows 1, Ctrl+arrows 256.
+    Pan(f64, f64),
+    ZoomIn,
+    ZoomOut,
+    /// Back to 1:1.
+    ZoomReset,
+    CycleChunkGrid,
+}
+
+impl From<ViewerKey> for ViewerMsg {
+    fn from(k: ViewerKey) -> Self {
+        match k {
+            ViewerKey::Pan(dx, dz) => Self::Map(MapEvent::Pan { dx, dz }),
+            ViewerKey::ZoomIn => Self::Zoom(2.0),
+            ViewerKey::ZoomOut => Self::Zoom(0.5),
+            ViewerKey::ZoomReset => Self::ZoomReset,
+            ViewerKey::CycleChunkGrid => Self::CycleChunkGrid,
+        }
+    }
+}
+
 /// Remembered viewer look (Settings TOML).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -51,6 +115,10 @@ pub struct ViewerPrefs {
     pub look_sens: f32,
     /// Keyboard fly speed (blocks / second; Ctrl × 2.5).
     pub fly_speed: f32,
+    /// Which side-panel tab is showing (TOML-friendly: two plain fields).
+    pub panel_tab: PanelTab,
+    /// The side panel is collapsed to its icon strip.
+    pub panel_closed: bool,
 }
 
 impl Default for ViewerPrefs {
@@ -61,6 +129,26 @@ impl Default for ViewerPrefs {
             movement: crate::viewer_3d_input::Move3::Normal,
             look_sens: 1.0,
             fly_speed: 20.0,
+            panel_tab: PanelTab::View,
+            panel_closed: false,
+        }
+    }
+}
+
+impl ViewerPrefs {
+    /// The open side-panel tab (`None` = collapsed to the icon strip).
+    pub fn panel(&self) -> Option<PanelTab> {
+        (!self.panel_closed).then_some(self.panel_tab)
+    }
+
+    /// Open a tab, or collapse the panel (`None`).
+    pub fn set_panel(&mut self, panel: Option<PanelTab>) {
+        match panel {
+            Some(t) => {
+                self.panel_tab = t;
+                self.panel_closed = false;
+            }
+            None => self.panel_closed = true,
         }
     }
 }
@@ -144,6 +232,24 @@ pub enum ViewerMsg {
     Ruler(crate::mapview_overlay::Ruler),
     Entities((i32, i32, i32, i32), Arc<Vec<omt_render::markers::EntityMarker>>),
     BGrid(Result<(Arc<omt_render::blocks3d::BlockGrid>, Option<crate::viewer_3d::GpuBlocks>), String>),
+    /// Open this world in another tool (the compact "Tools" menu).
+    OpenIn(crate::session::App),
+    /// Center on the world spawn (switches to the Overworld first).
+    GotoSpawn,
+    /// Center on the nearest player marker.
+    GotoPlayer,
+    /// Copy the pointed block as a `/tp x y z` command.
+    CopyTp,
+    /// Back to 1:1 zoom (keyboard `*`).
+    ZoomReset,
+    /// Auto → on → off → auto (keyboard Ctrl+G).
+    CycleChunkGrid,
+    /// Open/close a side-panel tab.
+    Panel(Option<PanelTab>),
+    /// The floating "Tools" menu is open or closed.
+    ToolsMenu(bool),
+    /// Keyboard navigation from the app subscription.
+    Key(ViewerKey),
 }
 
 pub struct ViewerState {
@@ -171,6 +277,9 @@ pub struct ViewerState {
     /// Debug/testing hook (`OMT_DEBUG_VIEWER_3D=1|blocks[@x,z]`): enter
     /// 3D (optionally block detail at a position) once loaded.
     debug3d: Option<String>,
+    /// Debug/testing hook (`OMT_DEBUG_VIEWER_MENU=1`): keep the Tools menu
+    /// pinned open (for headless screenshots).
+    debug_menu: bool,
     /// Biome legend of the loaded tiles (Biomes style) + tile count it saw.
     pub legend: Vec<(String, usize)>,
     legend_tiles: usize,
@@ -181,6 +290,8 @@ pub struct ViewerState {
     /// Distance measurement (left-drag on the map).
     pub measure: Option<[(f64, f64); 2]>,
     measuring: bool,
+    /// The floating "Tools" menu (open world in another tool) is showing.
+    pub tools_menu: bool,
 }
 
 impl ViewerState {
@@ -206,6 +317,7 @@ impl ViewerState {
             v3: crate::viewer_3d::View3 { gpu: true, ..Default::default() },
             regrid: false,
             debug3d: std::env::var("OMT_DEBUG_VIEWER_3D").ok(),
+            debug_menu: std::env::var("OMT_DEBUG_VIEWER_MENU").is_ok(),
             legend: Vec::new(),
             legend_tiles: usize::MAX,
             entities: Arc::default(),
@@ -213,6 +325,8 @@ impl ViewerState {
             ent_busy: false,
             measure: None,
             measuring: false,
+            // `OMT_DEBUG_VIEWER_MENU=1` pins the Tools menu open (screenshots).
+            tools_menu: std::env::var("OMT_DEBUG_VIEWER_MENU").is_ok(),
         }
     }
 
@@ -299,6 +413,26 @@ impl ViewerState {
     }
 
     pub fn update(&mut self, sess: &WorldSession, bookmarks: &mut Vec<Bookmark>, m: ViewerMsg) -> Task<ViewerMsg> {
+        // Any interaction closes the floating "Tools" menu; background tile
+        // work, viewport resizes and panel toggles don't. The debug hook
+        // (`OMT_DEBUG_VIEWER_MENU=1`) pins it open for screenshots.
+        if !self.debug_menu {
+            match &m {
+                ViewerMsg::Tiles(_)
+                | ViewerMsg::TexCell(_, _, _)
+                | ViewerMsg::Markers(_)
+                | ViewerMsg::Entities(_, _)
+                | ViewerMsg::Frame3(_, _)
+                | ViewerMsg::Grid3(_, _)
+                | ViewerMsg::BGrid(_)
+                | ViewerMsg::Dpi3(_)
+                | ViewerMsg::Ev3(_)
+                | ViewerMsg::ToolsMenu(_)
+                | ViewerMsg::Panel(_) => {}
+                ViewerMsg::Map(MapEvent::Resize(_)) => {}
+                _ => self.tools_menu = false,
+            }
+        }
         let store = sess.store.as_ref();
         let task = match m {
             ViewerMsg::Tiles(t) => {
@@ -552,6 +686,77 @@ impl ViewerState {
                 self.slime_rect = None;
                 Task::none()
             }
+            ViewerMsg::GotoSpawn => {
+                let Some((x, z)) = sess.summary.spawn else {
+                    self.status = "this world has no spawn point".into();
+                    return Task::none();
+                };
+                let mut tasks = Vec::new();
+                if self.ctl.dim != 0 {
+                    let o = Self::opts_for(0, self.cave, self.slicer, self.prefs.biome_tint);
+                    tasks.push(self.ctl.set_dim(0, o, store).map(ViewerMsg::Tiles));
+                }
+                self.center(x as f64 + 0.5, z as f64 + 0.5);
+                tasks.push(self.ctl.refill(store).map(ViewerMsg::Tiles));
+                self.status = format!("centered on spawn {x}, {z}");
+                Task::batch(tasks)
+            }
+            ViewerMsg::GotoPlayer => {
+                let target = self.players.iter().find(|p| p.dim == self.ctl.dim).or_else(|| self.players.first()).map(|p| (p.x, p.z, p.dim, p.label.clone()));
+                let Some((x, z, dim, label)) = target else {
+                    self.status = "no player markers in this world".into();
+                    return Task::none();
+                };
+                let mut tasks = Vec::new();
+                if dim != self.ctl.dim {
+                    let o = Self::opts_for(dim, self.cave, self.slicer, self.prefs.biome_tint);
+                    tasks.push(self.ctl.set_dim(dim, o, store).map(ViewerMsg::Tiles));
+                }
+                self.center(x, z);
+                tasks.push(self.ctl.refill(store).map(ViewerMsg::Tiles));
+                self.status = format!("centered on {label}");
+                Task::batch(tasks)
+            }
+            ViewerMsg::CopyTp => {
+                let (x, z) = self.hover.map_or_else(
+                    || (self.goto.0.trim().parse::<i32>().unwrap_or(0), self.goto.1.trim().parse::<i32>().unwrap_or(0)),
+                    |(x, z)| (x.floor() as i32, z.floor() as i32),
+                );
+                let y = self.ctl.map.as_ref().and_then(|m| m.identify(x, z)).map(|(_, y, _)| y);
+                let tp = match y {
+                    Some(y) => format!("/tp {x} {y} {z}"),
+                    None => format!("/tp {x} ~ {z}"),
+                };
+                self.status = format!("copied {tp}");
+                iced::clipboard::write(tp)
+            }
+            ViewerMsg::ZoomReset => {
+                self.ctl.camera.zoom = 1.0;
+                self.ctl.refill(store).map(ViewerMsg::Tiles)
+            }
+            ViewerMsg::CycleChunkGrid => {
+                self.prefs.chunk_grid = match self.prefs.chunk_grid {
+                    None => Some(true),
+                    Some(true) => Some(false),
+                    Some(false) => None,
+                };
+                self.status = match self.prefs.chunk_grid {
+                    None => "chunk grid: automatic".into(),
+                    Some(true) => "chunk grid: always on".into(),
+                    Some(false) => "chunk grid: off".into(),
+                };
+                Task::none()
+            }
+            ViewerMsg::Panel(p) => {
+                self.prefs.set_panel(p);
+                Task::none()
+            }
+            ViewerMsg::ToolsMenu(open) => {
+                self.tools_menu = open;
+                Task::none()
+            }
+            ViewerMsg::Key(k) => self.update(sess, bookmarks, k.into()),
+            ViewerMsg::OpenIn(_) => Task::none(),
         };
         self.plan_slime();
         if self.prefs.style.style == MapStyle::Biomes

@@ -161,11 +161,9 @@ impl OmniMCTools {
         if !sess.in_place {
             bar = bar.push(button(text("Save").size(13)).on_press_maybe(editable.then_some(Message::SaveSession(i))).style(style::button_style(Btn::Confirm)));
             bar = bar.push(button(text("Save As…").size(13)).on_press_maybe(editable.then_some(Message::SaveAsSession(i))).style(style::button_style(Btn::Standard)));
-        } else {
-            for other in [App::WorldEditor, App::NbtEditor, App::Pruner, App::Converter] {
-                bar = bar.push(button(row![assets::icon(other.icon(), 14.0), text(other.name()).size(12)].spacing(6).align_y(Alignment::Center)).padding([6, 10]).on_press(Message::OpenWorld(other, sess.origin())).style(style::button_style(Btn::Standard)));
-            }
         }
+        // In-place sessions (the Map Viewer) reach the other tools through
+        // the viewer's own compact "Tools" menu, not this header.
         bar = bar.push(button(text("Close").size(13)).on_press(Message::CloseSession(i)).style(style::button_style(Btn::Danger)));
         let header = container(bar).padding([8, 12]).style(style::panel());
         let body: Element<'a, Message> = match &tab.ui {
