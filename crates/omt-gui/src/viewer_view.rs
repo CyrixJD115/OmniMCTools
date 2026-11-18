@@ -1,10 +1,11 @@
-//! Map Viewer UI, uNmINeD-style: a compact **container nav** above the map
-//! (2D/3D, dimension, map style, go-to, tools, export), a slim **tool rail**
-//! (Photoshop-style quick toggles) docked left of the canvas, and a
-//! **tabbed side panel** (View · Style · Layers · Find · Export) that can
-//! collapse to its icon strip. Floating HUD chips sit on the map.
+//! Map Viewer UI, uNmINeD-style: a compact **nav bar** above the map
+//! (2D/3D, dimension, map style, go-to, tools), a slim **tool rail**
+//! (quick view modes + camera, docked left of the canvas), and a
+//! **tabbed side panel** (world data · look · actions) that can collapse
+//! to its icon strip. Every control has one home: quick view modes and the
+//! camera on the rail, go-to in the nav, everything else in the panel.
 
-use iced::widget::{button, column, container, pick_list, row, scrollable, slider, space, stack, text, text_input, toggler, tooltip};
+use iced::widget::{button, column, container, pick_list, row, scrollable, slider, space, stack, text, text_input, toggler};
 use iced::{Alignment, Color, Element, Length};
 use omt_art::{Glyph, Icon};
 use omt_render::style::MapStyle;
@@ -15,10 +16,6 @@ use crate::mapconfig::MapQuality;
 use crate::mapview::{MapView, Marker, Overlay};
 use crate::style::{self, Btn};
 use crate::viewer::{Bookmark, Layer, PanelTab, ViewerMsg, ViewerState};
-
-fn tip<'a>(content: impl Into<Element<'a, ViewerMsg>>, label: String, position: tooltip::Position) -> Element<'a, ViewerMsg> {
-    tooltip(content, container(text(label).size(12)).padding([4, 8]).style(style::card()), position).into()
-}
 
 fn labeled<'a>(label: &'a str, value: String, control: Element<'a, ViewerMsg>) -> Element<'a, ViewerMsg> {
     column![row![text(label).size(12).color(style::muted()), space::horizontal(), text(value).size(12)], control].spacing(4).into()
@@ -91,13 +88,8 @@ impl ViewerState {
         .spacing(4)
         .align_y(Alignment::Center);
         let tools = self.tools_menu_button();
-        let export = tip(
-            button(assets::glyph(Glyph::Export, style::fg(), 15.0)).padding(6).on_press(ViewerMsg::Export).style(style::button_style(Btn::Standard)),
-            "Export view as PNG…".into(),
-            tooltip::Position::Left,
-        );
         container(
-            row![mode, dims, styles, space::horizontal(), goto_row, self.cpu_picker(), tools, export]
+            row![mode, dims, styles, space::horizontal(), goto_row, self.cpu_picker(), tools]
                 .spacing(8)
                 .align_y(Alignment::Center),
         )
@@ -137,54 +129,39 @@ impl ViewerState {
 
     // ---------------------------------------------------------- tool rail
     /// Photoshop-style rail — same anatomy as the Pruner's (`maprail`):
-    /// the viewer's own markers and render modes, then the shared map
-    /// overlays, with zoom/fit pinned at the bottom.
+    /// the quick **view modes** (what the canvas shows), with the camera
+    /// (zoom/fit) pinned at the bottom. It is deliberately short: markers,
+    /// grids and overlays live once, in the panel's **Layers** tab — the
+    /// rail is the shortcut, not a second home for them.
     fn tool_rail(&self) -> Element<'_, ViewerMsg> {
         use crate::maprail::{self, Side};
         let p = &self.prefs;
         let side = Side::Left;
-        let slime_tip = if !self.bedrock && self.seed.is_none() { "Slime chunks (seed unknown)" } else { "Slime chunks" };
         let tex_tip = if crate::textures::current().is_some() { "Block textures when zoomed in" } else { "Block textures (no pack — see Settings)" };
-        let inspecting = p.panel() == Some(PanelTab::Inspect);
-        let inspect_msg = ViewerMsg::Panel(if inspecting { Some(PanelTab::View) } else { Some(PanelTab::Inspect) });
-        let mut top: Vec<Element<'_, ViewerMsg>> = vec![
-            maprail::tool(Glyph::Cube, "Chunk selection (inspector): click a chunk", inspecting, Some(inspect_msg), side),
-            maprail::separator(),
-            maprail::tool(Glyph::Player, "Player markers", p.players, Some(ViewerMsg::Layer(Layer::Players, !p.players)), side),
-            maprail::tool(Glyph::Bookmark, "Bookmarks", p.bookmarks, Some(ViewerMsg::Layer(Layer::Bookmarks, !p.bookmarks)), side),
-            maprail::tool(Glyph::Entity, format!("Entities ({})", self.entities.len()), p.entities, Some(ViewerMsg::Layer(Layer::Entities, !p.entities)), side),
-            maprail::tool(Glyph::Slime, slime_tip, p.slime, Some(ViewerMsg::Layer(Layer::Slime, !p.slime)), side),
-            maprail::separator(),
+        let top: Vec<Element<'_, ViewerMsg>> = vec![
             maprail::tool(Glyph::Cave, "Underground (caves)", self.cave, Some(ViewerMsg::Cave(!self.cave)), side),
             maprail::tool(Glyph::Slicer, "Slicer (hide blocks above Y)", self.slicer.is_some(), Some(ViewerMsg::Slicer(self.slicer.is_none())), side),
             maprail::tool(Glyph::Texture, tex_tip, p.textured, Some(ViewerMsg::Layer(Layer::Textures, !p.textured)), side),
-            maprail::separator(),
         ];
-        top.extend(maprail::overlay_group(maprail::Overlays {
-            chunk_grid: p.chunk_grid,
-            region_grid: p.region_grid,
-            spawn: p.spawn,
-            spawn_available: self.ctl.dim == 0,
-            hud: p.hud,
-            shortcuts: true,
-            cycle_chunk_grid: ViewerMsg::CycleChunkGrid,
-            toggle_region_grid: ViewerMsg::Layer(Layer::RegionGrid, !p.region_grid),
-            toggle_spawn: ViewerMsg::Layer(Layer::Spawn, !p.spawn),
-            toggle_hud: ViewerMsg::Layer(Layer::Hud, !p.hud),
-        }));
         let bottom = maprail::nav_group(ViewerMsg::Zoom(2.0), ViewerMsg::Zoom(0.5), ViewerMsg::Fit, true);
         maprail::strip(top, bottom)
     }
 
     // -------------------------------------------------------- side panel
-    /// The panel's icon strip (right-docked, tooltips open left); the
-    /// collapse chevron is pinned to the bottom like the rail's nav group.
+    /// The panel's icon strip (right-docked, tooltips open left), grouped
+    /// world data · look · actions; the collapse chevron is pinned to the
+    /// bottom like the rail's nav group.
     fn panel_tab_strip(&self) -> Element<'_, ViewerMsg> {
         use crate::maprail::{self, Side};
-        let top: Vec<Element<'_, ViewerMsg>> = PanelTab::ALL
-            .iter()
-            .map(|&tab| maprail::tool(tab.glyph(), tab.name(), self.prefs.panel() == Some(tab), Some(ViewerMsg::Panel(Some(tab))), Side::Right))
-            .collect();
+        // Separator before these tabs (after the data and look groups).
+        const GROUP_STARTS: [PanelTab; 2] = [PanelTab::View, PanelTab::Layers];
+        let mut top: Vec<Element<'_, ViewerMsg>> = Vec::new();
+        for tab in PanelTab::ALL {
+            if GROUP_STARTS.contains(&tab) {
+                top.push(maprail::separator());
+            }
+            top.push(maprail::tool(tab.glyph(), tab.name(), self.prefs.panel() == Some(tab), Some(ViewerMsg::Panel(Some(tab))), Side::Right));
+        }
         let (glyph, tip_label, msg) = if self.prefs.panel().is_some() {
             (Glyph::ChevronRight, "Collapse panel", ViewerMsg::Panel(None))
         } else {
@@ -371,24 +348,11 @@ impl ViewerState {
     }
 
     fn find_tab<'a>(&'a self, bookmarks: &'a [Bookmark]) -> Element<'a, ViewerMsg> {
+        // Go-to lives once, in the top bar (X / Z boxes); this tab holds the
+        // copy commands for the picked spot and the bookmarks.
         let nav = column![
-            row![
-                text_input("X", &self.goto.0).on_input(ViewerMsg::GotoX).on_submit(ViewerMsg::Goto).size(12).style(style::input()),
-                text_input("Z", &self.goto.1).on_input(ViewerMsg::GotoZ).on_submit(ViewerMsg::Goto).size(12).style(style::input()),
-                button(assets::glyph(Glyph::Target, style::t().on_accent, 14.0)).padding(6).on_press(ViewerMsg::Goto).style(style::button_style(Btn::Primary)),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-            row![
-                button(text("Fit world").size(12)).on_press(ViewerMsg::Fit).style(style::button_style(Btn::Standard)),
-                button(assets::glyph(Glyph::Plus, style::fg(), 14.0)).padding(6).on_press(ViewerMsg::Zoom(2.0)).style(style::button_style(Btn::Standard)),
-                button(text("−").size(14)).padding([2, 10]).on_press(ViewerMsg::Zoom(0.5)).style(style::button_style(Btn::Standard)),
-                space::horizontal(),
-                button(text("Copy /tp").size(11)).padding([5, 8]).on_press(ViewerMsg::CopyTp).style(style::button_style(Btn::Standard)),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-            text("Click the map to fill X/Z (or type “x z”, “spawn”, “player”). Left-drag measures a distance. Arrows pan, +/− zoom, * resets, Ctrl+G cycles the grid.").size(11).color(style::hint()),
+            text("Pick a spot with the X / Z boxes in the top bar — click the map fills them (or type “x z”, “spawn”, “player”). Left-drag measures a distance. Arrows pan, +/− zoom, * resets, Ctrl+G cycles the grid.").size(11).color(style::hint()),
+            row![button(text("Copy /tp").size(11)).padding([5, 8]).on_press(ViewerMsg::CopyTp).style(style::button_style(Btn::Standard)), space::horizontal()].align_y(Alignment::Center),
             self.copy_actions(),
         ]
         .spacing(8);
@@ -413,7 +377,7 @@ impl ViewerState {
             list,
         ]
         .spacing(8);
-        column![heading("GO TO"), nav, marks].spacing(8).into()
+        column![heading("COORDINATES"), nav, marks].spacing(8).into()
     }
 
     fn export_tab(&self) -> Element<'_, ViewerMsg> {
@@ -559,7 +523,8 @@ impl ViewerState {
         row![
             self.tool_rail(),
             column![self.nav(spawn), stack![map, hud, menu]].width(Length::Fill).height(Length::Fill),
-            row![self.panel_tab_strip(), self.panel(bookmarks)].height(Length::Fill),
+            self.panel_tab_strip(),
+            self.panel(bookmarks),
         ]
         .height(Length::Fill)
         .into()

@@ -47,8 +47,10 @@ pub enum PanelTab {
 }
 
 impl PanelTab {
+    /// Strip order: world data · look & filters · navigation & actions
+    /// (the strip draws a separator between the groups).
     pub const ALL: [PanelTab; 16] = [
-        Self::Info, Self::Inspect, Self::Players, Self::Biomes, Self::Blocks, Self::Entities, Self::View, Self::Style, Self::Stylesheet, Self::Filter, Self::Highlight, Self::Layers, Self::Find, Self::Registry, Self::Presets, Self::Export,
+        Self::Info, Self::Inspect, Self::Players, Self::Biomes, Self::Blocks, Self::Entities, Self::View, Self::Style, Self::Stylesheet, Self::Filter, Self::Highlight, Self::Registry, Self::Layers, Self::Find, Self::Presets, Self::Export,
     ];
 
     /// Monochrome glyph for the panel's icon strip (matches the rail).
