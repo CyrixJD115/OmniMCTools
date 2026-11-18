@@ -1,0 +1,19 @@
+[package]
+name = "omt-edit"
+description = "Amulet-style world editing for OmniMCTools: box selections, fill/replace/clear/paste with undo, structure export/import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-nbt.workspace = true
+omt-world.workspace = true
+omt-java.workspace = true
+omt-bedrock.workspace = true
+omt-convert.workspace = true
+thiserror.workspace = true
+rayon = "1"
+
+[lints]
+workspace = true

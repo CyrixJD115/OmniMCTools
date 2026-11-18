@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use omt_nbt::{ByteOrder, Container, Nbt, Tag};
 use omt_world::{Chunk, Dimension, WorldError, WorldNode, WorldResult, WorldStore};
 
-use crate::region::RegionFile;
+use crate::region::{HEADER_BYTES, RegionFile};
+
+/// Per-chunk results of [`JavaWorld::read_region_chunks`].
+pub type RegionChunkReads = Vec<((i32, i32), WorldResult<Option<Chunk>>)>;
 
 /// Parse one Java block-palette entry across format eras (verified against
 /// the 26.3 fixture, PLAN §0 2026-11-08):
@@ -249,11 +252,68 @@ impl JavaWorld {
         if !region.contains(x, z) {
             return Ok(None);
         }
-        let bytes = std::fs::read(&path).map_err(WorldError::Io)?;
         region
-            .read_chunk(&bytes, x, z)
+            .read_chunk_from_file(x, z)
             .map(Some)
             .map_err(|e| WorldError::Corrupt { context: format!("chunk ({x},{z})"), source: Box::new(e) })
+    }
+
+    /// Read and decode many chunks of ONE region: the region file is read
+    /// once and chunks decode in parallel (map tiles align with regions;
+    /// per-chunk `read_chunk` would re-read the region for every chunk).
+    /// Coordinates outside region `(rx, rz)` are reported as absent.
+    pub fn read_region_chunks(
+        &self,
+        dim: u8,
+        rx: i32,
+        rz: i32,
+        coords: &[(i32, i32)],
+    ) -> WorldResult<RegionChunkReads> {
+        use rayon::prelude::*;
+        let path = self
+            .dimension_dir(dim)
+            .unwrap_or_else(|| dimension_dir(&self.root, dim))
+            .join(format!("r.{rx}.{rz}.mca"));
+        if !path.is_file() {
+            return Ok(coords.iter().map(|&c| (c, Ok(None))).collect());
+        }
+        let bytes = std::fs::read(&path).map_err(WorldError::Io)?;
+        let region = RegionFile::from_bytes(&path, &bytes).map_err(region_err)?;
+        Ok(coords
+            .par_iter()
+            .map(|&(x, z)| {
+                if x.div_euclid(32) != rx || z.div_euclid(32) != rz || !region.contains(x, z) {
+                    return ((x, z), Ok(None));
+                }
+                let res = region
+                    .read_chunk(&bytes, x, z)
+                    .map_err(|e| WorldError::Corrupt { context: format!("chunk ({x},{z})"), source: Box::new(e) })
+                    .and_then(|nbt| nbt_to_chunk(dim, x, z, &nbt).map(Some));
+                ((x, z), res)
+            })
+            .collect())
+    }
+
+    /// Path of region `(rx, rz)` of a dimension (may not exist).
+    pub fn region_path(&self, dim: u8, rx: i32, rz: i32) -> PathBuf {
+        self.dimension_dir(dim)
+            .unwrap_or_else(|| dimension_dir(&self.root, dim))
+            .join(format!("r.{rx}.{rz}.mca"))
+    }
+
+    /// Fingerprint of a region file for render caches: size + a hash of the
+    /// 8 KiB header (its timestamp table changes whenever a chunk is saved).
+    /// `None` when the region does not exist.
+    pub fn region_fingerprint(&self, dim: u8, rx: i32, rz: i32) -> Option<u64> {
+        use std::io::Read;
+        let path = self.region_path(dim, rx, rz);
+        let mut file = std::fs::File::open(&path).ok()?;
+        let len = file.metadata().ok()?.len();
+        let mut header = vec![0u8; HEADER_BYTES.min(len as usize)];
+        file.read_exact(&mut header).ok()?;
+        let mut h = crc32fast::Hasher::new();
+        h.update(&header);
+        Some(((h.finalize() as u64) << 32) ^ len)
     }
 
     /// Player `.dat` files (uuid-named): `players/data/` on 26.3+ layouts,

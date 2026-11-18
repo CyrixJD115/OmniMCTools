@@ -4,7 +4,7 @@
 //! derived inverse table, so one palette serves both editions).
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 
 use omt_world::BlockState;
 
@@ -54,7 +54,7 @@ pub struct Palette {
     /// Bedrock numeric biome id → Java biome name.
     bedrock_biomes: BTreeMap<i32, String>,
     /// Memoized Bedrock-name → color for names absent from the Java table.
-    resolved: Mutex<HashMap<String, BlockColor>>,
+    resolved: RwLock<HashMap<String, BlockColor>>,
 }
 
 static EMBEDDED: OnceLock<Palette> = OnceLock::new();
@@ -96,7 +96,26 @@ impl Palette {
             }
         }
         let bedrock_biomes = omt_convert::RegistryRules::embedded().biome_names();
-        Ok(Self { blocks, biomes, bedrock_biomes, resolved: Mutex::new(HashMap::new()) })
+        Ok(Self { blocks, biomes, bedrock_biomes, resolved: RwLock::new(HashMap::new()) })
+    }
+
+    /// Every known biome name, sorted (editor suggestions).
+    pub fn biome_names(&self) -> Vec<&str> {
+        let mut v: Vec<&str> = self.biomes.keys().map(String::as_str).collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Every known block name, sorted (editor suggestions).
+    pub fn block_names(&self) -> Vec<&str> {
+        let mut v: Vec<&str> = self.blocks.keys().map(String::as_str).collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Map color of a block by name (default state).
+    pub fn color_of(&self, name: &str) -> [u8; 4] {
+        self.blocks.get(name).map_or([0x80, 0x80, 0x80, 255], |c| c.rgba)
     }
 
     pub fn block_count(&self) -> usize {
@@ -108,12 +127,12 @@ impl Palette {
         if let Some(c) = self.blocks.get(&state.name) {
             return *c;
         }
-        let mut cache = self.resolved.lock().expect("palette cache poisoned");
-        if let Some(c) = cache.get(&state.name) {
+        // Read-mostly memo (render threads hit it per palette entry).
+        if let Some(c) = self.resolved.read().expect("palette cache poisoned").get(&state.name) {
             return *c;
         }
         let c = self.bedrock_fallback(state);
-        cache.insert(state.name.clone(), c);
+        self.resolved.write().expect("palette cache poisoned").insert(state.name.clone(), c);
         c
     }
 

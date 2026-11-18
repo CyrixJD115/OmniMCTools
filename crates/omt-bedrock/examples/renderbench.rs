@@ -1,63 +1,63 @@
-//! Probe: GUI lazy-map timings — scan cost and one 32×32-chunk tile build.
+//! Map-read benchmark: column index (key-only scan) → batched exact-key
+//! reads → parallel decode → render, in bounded batches.
+//!
+//! `cargo run --release -p omt-bedrock --example renderbench -- <world> [max_columns] [batch]`
 
-use rayon::prelude::*;
-use std::time::Instant;
+use omt_render::{Palette, RenderOptions, render_chunk};
+
+fn rss_mb() -> u64 {
+    omt_world::sysmem::process_rss().unwrap_or(0) / (1024 * 1024)
+}
 
 fn main() {
-    let root = std::path::PathBuf::from("/home/cyrixjd115/Dev/Dev/Reverse_Engineering/UMT_Crack/test_worlds/bedrock-lostsurfur");
-    let world = omt_bedrock::BedrockWorld::open_read_only(&root).unwrap();
-    let t = Instant::now();
-    let snap = world.snapshot().unwrap();
-    println!("snapshot (one-time): {:.2}s", t.elapsed().as_secs_f64());
+    let mut args = std::env::args().skip(1);
+    let path = args.next().expect("world path");
+    let max: usize = args.next().map_or(usize::MAX, |s| s.parse().expect("max columns"));
+    let batch: usize = args.next().map_or(512, |s| s.parse().expect("batch"));
+    let world = omt_bedrock::BedrockWorld::open_read_only(std::path::Path::new(&path)).unwrap();
 
-    // Scan = key decode only.
-    let t = Instant::now();
-    let mut count = 0usize;
-    for (k, _) in snap.iter() {
-        if let omt_bedrock::keys::DbKey::ChunkRecord { dim: 0, tag, .. } = omt_bedrock::keys::decode_key(&k)
-            && tag == omt_bedrock::keys::tag::VERSION
-        {
-            count += 1;
-        }
-    }
-    println!("scan: {count} chunks in {:.2}s", t.elapsed().as_secs_f64());
-
-    // One tile build (tile 0,0 = chunks 0..32 × 0..32).
-    let opts = omt_render::RenderOptions::default();
-    let palette = omt_render::Palette::embedded();
-    let t = Instant::now();
-    let (x0, z0) = (0, 0);
-    let coords: Vec<(i32, i32)> = (x0..x0 + 32)
-        .flat_map(|cx| (z0 - 1..z0 + 32).map(move |cz| (cx, cz)))
-        .collect();
-    let decoded: Vec<_> = coords
-        .par_iter()
-        .map(|&(cx, cz)| {
-            let base = omt_bedrock::keys::chunk_base(cx, cz, 0);
-            let records: Vec<(Vec<u8>, Vec<u8>)> = snap
-                .scan_prefix(&base)
-                .map(|(k, v)| (k.to_vec(), v.to_vec()))
-                .collect();
-            (cx, cz, omt_bedrock::BedrockWorld::decode_snapshot_column(0, cx, cz, &records))
-        })
-        .collect();
-    let mut renders = std::collections::HashMap::new();
-    let mut errors = 0;
-    for (cx, cz, c) in decoded {
-        match c {
-            Ok(Some(chunk)) => {
-                renders.insert((cx, cz), omt_render::render_chunk(&chunk, palette, &opts));
-            }
-            Ok(None) => {}
-            Err(_) => errors += 1,
-        }
-    }
-    omt_render::shade_all(&mut renders);
+    let t = std::time::Instant::now();
+    let index = world.column_index().unwrap();
+    let dim = index.dim(0).cloned().unwrap_or_default();
     println!(
-        "tile build: {} chunks rendered ({} errors) in {:.2}s → on-screen in ≈{:.2}s after scan",
-        renders.len(),
-        errors,
-        t.elapsed().as_secs_f64(),
-        t.elapsed().as_secs_f64()
+        "index: {} keys → {} overworld chunks, {} dims, {:.1} MB index, {:?}, rss {} MB",
+        index.keys_scanned,
+        dim.len(),
+        index.dims().len(),
+        index.heap_bytes() as f64 / 1e6,
+        t.elapsed(),
+        rss_mb()
+    );
+
+    let mut cols: Vec<(i32, i32)> = dim.chunks().iter().collect();
+    cols.sort_unstable_by_key(|&(x, z)| (z, x));
+    cols.truncate(max);
+    let palette = Palette::embedded();
+    let opts = RenderOptions::default();
+    let t = std::time::Instant::now();
+    let (mut ok, mut errs, mut read_t, mut peak) = (0usize, 0usize, std::time::Duration::ZERO, 0u64);
+    for chunk in cols.chunks(batch) {
+        let infos: Vec<_> = chunk.iter().map(|&(x, z)| (x, z, dim.get(x, z).unwrap())).collect();
+        let tr = std::time::Instant::now();
+        let decoded = world.read_render_columns(0, &infos).unwrap();
+        read_t += tr.elapsed();
+        use rayon::prelude::*;
+        let renders: Vec<_> = decoded
+            .into_par_iter()
+            .map(|(_, _, c)| match c {
+                Ok(Some(c)) => Some(render_chunk(&c, palette, &opts)),
+                _ => None,
+            })
+            .collect();
+        for r in renders {
+            if r.is_some() { ok += 1 } else { errs += 1 }
+        }
+        peak = peak.max(rss_mb());
+    }
+    let el = t.elapsed();
+    println!(
+        "rendered {ok} ({errs} empty/err) of {} in {el:?} ({:.1} µs/chunk; read+decode {read_t:?}), peak rss {peak} MB",
+        cols.len(),
+        el.as_micros() as f64 / cols.len().max(1) as f64
     );
 }

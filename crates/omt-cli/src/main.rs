@@ -9,6 +9,7 @@ mod nbt_cmd;
 mod prune_cmd;
 mod registry_cmd;
 mod render_cmd;
+mod verify_cmd;
 
 use clap::Parser;
 
@@ -44,6 +45,8 @@ enum Command {
     Prune(prune_cmd::Args),
     /// Render a top-down map PNG (Chunk Locator view; slicer, biome tint).
     Render(render_cmd::Args),
+    /// Decode everything in a world and report failures (run after edits).
+    Verify(verify_cmd::Args),
 }
 
 fn main() {
@@ -58,6 +61,7 @@ fn main() {
         Command::Registry(args) => registry_cmd::run(args),
         Command::Prune(args) => prune_cmd::run(&args),
         Command::Render(args) => render_cmd::run(&args),
+        Command::Verify(args) => verify_cmd::run(&args),
     };
     if let Err(err) = result {
         eprintln!("error: {err}");

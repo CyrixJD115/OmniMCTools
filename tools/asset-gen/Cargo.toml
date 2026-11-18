@@ -1,0 +1,15 @@
+[package]
+name = "asset-gen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Writes OmniMCTools' procedural art (omt-art) to PNG files: app icon, wordmark, icons, landscapes, and a contact sheet."
+
+[dependencies]
+omt-art.workspace = true
+png = "0.18"
+
+[lints]
+workspace = true

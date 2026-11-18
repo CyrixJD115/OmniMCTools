@@ -39,15 +39,11 @@ Android sources). Library + CLI (`omt`) + Iced GUI. Repository:
 
 ## File size budget
 
-- **Target: every source file stays under 700 lines.** Hard ceiling: 900.
-- Prefer splitting a file over growing past the target: extract a module
-  (types / parse / serialize), or move `#[cfg(test)]` bodies into
-  `tests/`. Doc comments count toward the budget; generated files and
-  fixtures don't.
-- An exception needs a one-line justification in the PLAN.md ledger.
-- Known current exceptions (split opportunistically when touching them):
-  `crates/omt-convert/src/items.rs` (~1250), `crates/omt-nbt/src/edit.rs`
-  (~830).
+- **Hard rule (user, 2026-11-17): every source file stays under 1000 lines.**
+  No exceptions. Split before crossing it (extract a module, or move
+  `#[cfg(test)]` bodies into a sibling `*_tests.rs` via `#[path]`).
+- Preferred target: under 700 lines per file.
+- Doc comments count; generated files and fixtures don't.
 
 ## Layout
 
@@ -59,7 +55,15 @@ crates/omt-java       Anvil regions, Java world store (M1)
 crates/omt-bedrock    LevelDB keys, subchunk/data3D codecs (M1)
 crates/omt-convert    Java <-> Bedrock conversion + loss ledger (M3/M4)
 crates/omt-cli        the `omt` binary
-crates/omt-gui        Iced app (M2 editor; grows per milestone)
+crates/omt-render     map rendering: LOD tiles, styles (post-process), markers, voxel 3D
+crates/omt-prune      pruner engine
+crates/omt-script     Lua extensions
+crates/omt-art        procedural art (textures, icons, pixel font, landscapes)
+crates/omt-texpack    Bedrock resource packs (installed game .brarchive / opt-in download)
+crates/omt-edit       world editing (selections, fill/replace/paste, undo, structures, biomes, entities)
+crates/omt-gpu        wgpu off-screen 3D terrain (instanced columns)
+crates/omt-gui        Iced app (shell, library, Map Viewer, editors)
+tools/asset-gen       export omt-art images as PNG
 tools/registry-gen    (M3) registry generation from pinned client.jar
 ```
 

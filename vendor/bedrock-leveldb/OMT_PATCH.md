@@ -10,3 +10,11 @@ license files kept alongside). Vendored unmodified except:
   `crates/omt-bedrock/examples/getbench.rs`. Reads were already range-
   filtered per table, so multiple tables work unchanged.
 - `Cargo.toml`: the `[[bench]]` target was dropped (benches not vendored).
+- `src/table.rs` `get_table_entries` returns a tri-state `TableLookup`
+  (`Absent` / `Deleted` / `Value`) and `src/db.rs` `get_many_owned` treats a
+  tombstone as resolved. Upstream reported a deletion as "not found" and kept
+  probing older tables, resurrecting deleted records.
+- `src/db.rs` `get_many_owned` selects each table's candidate keys by binary
+  search over the sorted request (O(T·log K) instead of O(T·K)). Map tiles
+  issue ~10–30k exact keys per batch against ~1,000+ table worlds, where the
+  linear filter dominated.

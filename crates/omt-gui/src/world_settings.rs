@@ -268,7 +268,7 @@ impl WorldSettings {
         for (i, f) in self.fields.iter().enumerate() {
             if f.group != group {
                 group = f.group;
-                col = col.push(text(group).size(16).color(style::ACCENT));
+                col = col.push(text(group).size(16).color(style::accent()));
             }
             let control: Element<'_, WsMsg> = match &f.kind {
                 Kind::Bool => toggler(f.draft == "1").on_toggle(move |b| WsMsg::Edit(i, if b { "1" } else { "0" }.into())).into(),
@@ -284,8 +284,8 @@ impl WorldSettings {
                 container(
                     row![
                         column![
-                            text(f.label.clone()).size(14).color(if changed { style::WARN } else { style::FG }),
-                            text(format!("{} · {}", f.desc, f.path)).size(11).color(style::MUTED),
+                            text(f.label.clone()).size(14).color(if changed { style::warn() } else { style::fg() }),
+                            text(format!("{} · {}", f.desc, f.path)).size(11).color(style::muted()),
                         ]
                         .width(Length::Fill),
                         control,
@@ -300,14 +300,14 @@ impl WorldSettings {
         let bar = row![
             text("World Settings").size(18),
             space::horizontal(),
-            text(self.status.clone()).size(12).color(style::MUTED),
+            text(self.status.clone()).size(12).color(style::muted()),
             button(text("Revert").size(12)).on_press_maybe(self.dirty().then_some(WsMsg::Revert)).style(style::button_style(Btn::Standard)),
             button(text("Apply").size(12)).on_press_maybe(self.dirty().then_some(WsMsg::Apply)).style(style::button_style(Btn::Confirm)),
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center);
         let body: Element<'_, WsMsg> = if self.fields.is_empty() {
-            text("level.dat could not be read.").color(style::MUTED).into()
+            text("level.dat could not be read.").color(style::muted()).into()
         } else {
             scrollable(col.padding([0, 4])).height(Length::Fill).into()
         };

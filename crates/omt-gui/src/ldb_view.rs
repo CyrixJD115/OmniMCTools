@@ -178,8 +178,8 @@ impl LdbView {
                 button(
                     row![
                         text(r.printable.chars().take(48).collect::<String>()).size(12).font(Font::MONOSPACE).width(Length::FillPortion(3)),
-                        text(r.desc.clone()).size(12).color(style::MUTED).width(Length::FillPortion(4)),
-                        text(format!("{} B", r.size)).size(11).color(style::HINT).width(70),
+                        text(r.desc.clone()).size(12).color(style::muted()).width(Length::FillPortion(4)),
+                        text(format!("{} B", r.size)).size(11).color(style::hint()).width(70),
                     ]
                     .spacing(8),
                 )
@@ -206,10 +206,10 @@ impl LdbView {
             ]
             .spacing(6)
             .into(),
-            None => text("Select a key to see its bytes.").size(12).color(style::MUTED).into(),
+            None => text("Select a key to see its bytes.").size(12).color(style::muted()).into(),
         };
         column![
-            row![text("LevelDB Search").size(18), space::horizontal(), text(self.status.clone()).size(12).color(style::MUTED)],
+            row![text("LevelDB Search").size(18), space::horizontal(), text(self.status.clone()).size(12).color(style::muted())],
             search,
             row![
                 scrollable(column![list, more].spacing(4)).height(Length::Fill).width(Length::FillPortion(3)),

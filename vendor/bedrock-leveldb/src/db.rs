@@ -421,15 +421,31 @@ impl Db {
             }
         }
 
+        // OMT patch: candidates per table come from a binary search over the
+        // sorted keys (O(log K) per table instead of O(K)), and a tombstone
+        // resolves its key (`None`) instead of falling through to an older
+        // table where the deleted record would resurrect.
+        let mut order: Vec<usize> = (0..keys.len()).filter(|&i| !resolved[i]).collect();
+        order.sort_by(|&a, &b| keys[a].as_ref().cmp(keys[b].as_ref()));
         let mut table_probes = 0usize;
         let mut table_hits = 0usize;
         for table in manifest_tables(&inner.manifest).iter().rev() {
-            let candidate_indexes = keys
+            if order.is_empty() {
+                break;
+            }
+            let lo = table.smallest_key.as_ref().map_or(0, |smallest| {
+                order.partition_point(|&i| keys[i].as_ref() < smallest.as_slice())
+            });
+            let hi = table.largest_key.as_ref().map_or(order.len(), |largest| {
+                order.partition_point(|&i| keys[i].as_ref() <= largest.as_slice())
+            });
+            if lo >= hi {
+                continue;
+            }
+            let candidate_indexes = order[lo..hi]
                 .iter()
-                .enumerate()
-                .filter_map(|(index, key)| {
-                    (!resolved[index] && table.may_contain_user_key(key.as_ref())).then_some(index)
-                })
+                .copied()
+                .filter(|&index| !resolved[index])
                 .collect::<Vec<_>>();
             if candidate_indexes.is_empty() {
                 continue;
@@ -449,15 +465,24 @@ impl Db {
                 read_checksums(&self.options, &options),
                 read_cache(&options, &self.block_cache),
             )?;
-            for (candidate_index, value) in candidate_indexes.into_iter().zip(table_results) {
-                if let Some(value) = value {
-                    results[candidate_index] = Some(value);
-                    resolved[candidate_index] = true;
-                    table_hits = table_hits.saturating_add(1);
+            let mut newly_resolved = false;
+            for (candidate_index, lookup) in candidate_indexes.into_iter().zip(table_results) {
+                match lookup {
+                    table::TableLookup::Absent => {}
+                    table::TableLookup::Deleted => {
+                        resolved[candidate_index] = true;
+                        newly_resolved = true;
+                    }
+                    table::TableLookup::Value(value) => {
+                        results[candidate_index] = Some(value);
+                        resolved[candidate_index] = true;
+                        newly_resolved = true;
+                        table_hits = table_hits.saturating_add(1);
+                    }
                 }
             }
-            if resolved.iter().all(|resolved| *resolved) {
-                break;
+            if newly_resolved {
+                order.retain(|&index| !resolved[index]);
             }
         }
         log::debug!(

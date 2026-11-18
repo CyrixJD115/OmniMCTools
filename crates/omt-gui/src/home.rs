@@ -1,132 +1,191 @@
-//! Home screen: UMT-style app tiles (NBT Editor · Converter · Pruner) and,
-//! once an app is chosen, the world picker (discovered worlds as cards with
-//! icon, edition, version, "Mode, Cheats" blurb and last-played time, plus
-//! Browse folder / Open archive).
+//! Home dashboard (hero banner with stats and quick actions, tool cards,
+//! "jump back in" recent worlds, detected launchers) and the tool landing
+//! pages (tool hero + the library targeted at that tool).
 
-use iced::widget::{button, column, container, image, row, scrollable, space, text};
-use iced::{Element, Length};
+use iced::widget::{button, column, container, row, scrollable, space, stack, text};
+use iced::{Alignment, Color, Element, Length};
+use omt_art::Icon;
 
+use crate::Message;
+use crate::Page;
+use crate::assets;
+use crate::library::{self, Library};
 use crate::session::App;
+use crate::settings::Settings;
 use crate::style::{self, Btn};
 use crate::worlds::{self, WorldEntry};
-use crate::Message;
 
-const APPS: [(App, &str, &str); 3] = [
-    (App::NbtEditor, "🗂  NBT Editor", "Edit the raw saved data of your worlds: world settings, players, entities, chunks, LevelDB keys — with undo/redo, search, copy/paste and a chunk locator."),
-    (App::Converter, "⇄  Converter", "Convert worlds between Java and Bedrock (latest versions) with skip-partial-chunks, game mode and per-dimension options; settings and game rules carried over."),
-    (App::Pruner, "✂  Pruner", "Select and remove unwanted parts of your worlds with layered Box, Circle, Polygon, Split and Time selections, then Optimize."),
-];
-
-pub fn view<'a>(
-    worlds: &'a [WorldEntry],
-    picker: Option<App>,
-    scanning: bool,
-    opening: bool,
-    recent: &'a [std::path::PathBuf],
-) -> Element<'a, Message> {
-    let header = row![
-        column![
-            row![text("Omni").size(30).color(style::ACCENT), text("MCTools").size(30)],
-            text("Free, offline Minecraft world tools — Java + Bedrock, latest stable. No account, no internet.").size(13).color(style::MUTED),
-        ]
-        .spacing(4),
-        space::horizontal(),
-        button(text("Open NBT file…").size(13)).on_press(Message::PickFile).style(style::button_style(Btn::Standard)).padding([8, 12]),
-        button(text("🧩 Extensions").size(13)).on_press(Message::OpenExtensions).style(style::button_style(Btn::Standard)).padding([8, 12]),
-        button(text("⚙ Settings").size(13)).on_press(Message::OpenSettings).style(style::button_style(Btn::Standard)).padding([8, 12]),
-    ]
-    .spacing(8)
-    .align_y(iced::Alignment::Center);
-
-    let tiles = APPS.iter().fold(row![].spacing(14), |r, (app, title, desc)| {
-        let selected = picker == Some(*app);
-        let body = column![text(*title).size(20), text(*desc).size(12).color(style::MUTED)].spacing(8);
-        let tile = button(container(body).padding(16).width(Length::Fill))
-            .on_press(Message::ChooseApp(*app))
-            .width(Length::FillPortion(1))
-            .style(style::button_style(if selected { Btn::Primary } else { Btn::Standard }));
-        r.push(tile)
-    });
-
-    let picker_view: Element<'a, Message> = match picker {
-        None => column![
-            text("Choose an app above, then pick a world.").size(13).color(style::MUTED),
-            recent_list(recent),
-        ]
-        .spacing(10)
-        .into(),
-        Some(app) => world_picker(app, worlds, scanning, opening),
-    };
-
-    container(column![header, tiles, iced::widget::rule::horizontal(1.0), picker_view].spacing(16).padding(20))
-        .width(Length::Fill)
-        .height(Length::Fill)
+fn stat<'a>(value: String, label: &'a str) -> Element<'a, Message> {
+    container(column![text(value).size(20).font(style::BOLD).color(Color::WHITE), text(label).size(11).color(Color::from_rgb(0.85, 0.87, 0.9))].spacing(0))
+        .padding([8, 14])
+        .style(style::scrim(0.45))
         .into()
 }
 
-fn recent_list(recent: &[std::path::PathBuf]) -> Element<'_, Message> {
-    if recent.is_empty() {
-        return space::vertical().height(0).into();
-    }
-    let items = recent.iter().fold(column![text("Recent").size(14)].spacing(4), |c, p| {
-        c.push(text(p.display().to_string()).size(12).color(style::MUTED))
-    });
-    items.into()
-}
-
-fn world_picker<'a>(app: App, worlds: &'a [WorldEntry], scanning: bool, opening: bool) -> Element<'a, Message> {
-    let actions = row![
-        text(format!("Select a world for the {}", app.name())).size(16),
-        space::horizontal(),
-        button(text("Browse folder…").size(12)).on_press(Message::BrowseFolder(app)).style(style::button_style(Btn::Standard)),
-        button(text("Open .mcworld / .zip…").size(12)).on_press(Message::BrowseArchive(app)).style(style::button_style(Btn::Standard)),
-        button(text("Rescan").size(12)).on_press(Message::Rescan).style(style::button_style(Btn::Ghost)),
-    ]
-    .spacing(8)
-    .align_y(iced::Alignment::Center);
-    let note: Element<'a, Message> = if opening {
-        text("Copying the world into a workspace… (the original is never modified until you Save)").size(12).color(style::WARN).into()
-    } else if scanning {
-        text("Scanning world folders…").size(12).color(style::MUTED).into()
-    } else if worlds.is_empty() {
-        text("No worlds found in the standard folders. Add folders in Settings, or Browse.").size(12).color(style::MUTED).into()
-    } else {
-        text(format!("{} world(s)", worlds.len())).size(12).color(style::MUTED).into()
-    };
-    let list = worlds.iter().fold(column![].spacing(8), |c, w| c.push(world_card(app, w, opening)));
-    column![actions, note, scrollable(list).height(Length::Fill)].spacing(10).into()
-}
-
-fn world_card(app: App, w: &WorldEntry, opening: bool) -> Element<'_, Message> {
-    let icon: Element<'_, Message> = match &w.summary.icon {
-        Some(p) => image(image::Handle::from_path(p)).width(64).height(64).into(),
-        None => container(text(if w.summary.edition == omt_world::Edition::Java { "J" } else { "B" }).size(26))
-            .center(64)
-            .style(style::card_selected())
-            .into(),
-    };
-    let version = crate::style::version_label(&w.summary);
-    let played = w.last_modified.map(worlds::format_time).unwrap_or_default();
-    let info = column![
-        text(w.summary.name.clone()).size(16),
-        text(format!("{} · {} · {}", w.summary.edition.name(), version, worlds::blurb(w))).size(12).color(style::MUTED),
-        text(format!("Last played {played} · {} · {}", w.folder_label, w.origin.display())).size(11).color(style::HINT),
-    ]
-    .spacing(3);
-    container(
+fn hero<'a>(worlds: &[WorldEntry]) -> Element<'a, Message> {
+    let java = worlds.iter().filter(|w| w.edition() == omt_world::Edition::Java).count();
+    let launchers = worlds.iter().map(|w| w.launcher).collect::<std::collections::BTreeSet<_>>().len();
+    let total: u64 = worlds.iter().map(|w| w.size).sum();
+    let content = column![
+        assets::wordmark(40.0),
+        text("World tools for Minecraft Java & Bedrock — view, edit, convert and prune. Offline. No account.").size(14).color(Color::WHITE),
         row![
-            icon,
-            info,
-            space::horizontal(),
-            button(text(format!("Open in {}", app.name())).size(13))
-                .on_press_maybe((!opening).then(|| Message::OpenWorld(app, w.origin.clone())))
-                .style(style::button_style(Btn::Confirm))
-                .padding([8, 14]),
+            button(row![assets::icon(Icon::Worlds, 16.0), text("Browse worlds").size(13)].spacing(8).align_y(Alignment::Center)).padding([9, 16]).on_press(Message::Nav(Page::Library)).style(style::button_style(Btn::Primary)),
+            button(row![assets::icon(Icon::Map, 16.0), text("Open a map…").size(13)].spacing(8).align_y(Alignment::Center)).padding([9, 16]).on_press(Message::BrowseFolder(App::MapViewer)).style(style::button_style(Btn::Standard)),
+            button(row![assets::icon(Icon::NbtEditor, 16.0), text("Open NBT file…").size(13)].spacing(8).align_y(Alignment::Center)).padding([9, 16]).on_press(Message::PickFile).style(style::button_style(Btn::Standard)),
+        ]
+        .spacing(10),
+        space::vertical().height(Length::Fill),
+        row![
+            stat(worlds.len().to_string(), "worlds"),
+            stat(java.to_string(), "Java"),
+            stat((worlds.len() - java).to_string(), "Bedrock"),
+            stat(launchers.to_string(), "launchers"),
+            stat(worlds::human_size(total), "on disk"),
+        ]
+        .spacing(8),
+    ]
+    .spacing(12);
+    let shade = container(space::vertical()).width(Length::Fill).height(Length::Fill).style(|_| {
+        let g = iced::gradient::Linear::new(std::f32::consts::FRAC_PI_2).add_stop(0.0, Color::from_rgba(0.0, 0.0, 0.0, 0.62)).add_stop(0.65, Color::from_rgba(0.0, 0.0, 0.0, 0.1)).add_stop(1.0, Color::TRANSPARENT);
+        container::Style { background: Some(iced::Background::Gradient(g.into())), ..Default::default() }
+    });
+    container(stack![assets::banner(assets::hero_scene(), 300.0), shade, container(content).padding([24, 28]).height(300)])
+        .height(300)
+        .width(Length::Fill)
+        .style(|_| container::Style { border: iced::border::rounded(12), ..Default::default() })
+        .clip(true)
+        .into()
+}
+
+fn tool_card<'a>(app: App) -> Element<'a, Message> {
+    let short = match app {
+        App::MapViewer => "Explore worlds with lighting, night & cave views",
+        App::WorldEditor => "Fill, replace, copy & paste blocks · structures",
+        App::NbtEditor => "Edit level data, players, chunks & LevelDB",
+        App::Converter => "Java ⇄ Bedrock, settings carried over",
+        App::Pruner => "Trim unwanted chunks with layered selections",
+    };
+    button(
+        row![
+            assets::block(app.block(), 56.0),
+            column![
+                {
+                    let mut r = row![assets::icon(app.icon(), 16.0), text(app.name()).size(15).font(style::BOLD)].spacing(6).align_y(Alignment::Center);
+                    if app.alpha() {
+                        r = r.push(style::alpha_badge());
+                    }
+                    r
+                },
+                text(short).size(12).color(style::muted())
+            ]
+            .spacing(4),
         ]
         .spacing(14)
-        .align_y(iced::Alignment::Center),
+        .align_y(Alignment::Center),
     )
-    .padding(10)
-    .style(style::card())
+    .width(Length::FillPortion(1))
+    .padding(14)
+    .on_press(Message::Nav(Page::Tool(app)))
+    .style(style::button_style(Btn::Card))
     .into()
+}
+
+fn section_title<'a>(title: &'a str, action: Option<(&'a str, Message)>) -> Element<'a, Message> {
+    let mut r = row![assets::heading(title, style::fg(), 2), space::horizontal()].align_y(Alignment::Center);
+    if let Some((label, msg)) = action {
+        r = r.push(button(text(label).size(12)).on_press(msg).style(style::button_style(Btn::Ghost)));
+    }
+    r.into()
+}
+
+fn recent_card<'a>(w: &'a WorldEntry, s: &Settings) -> Element<'a, Message> {
+    let h = library::cover_handle(w, s);
+    let img = iced::widget::image(h).content_fit(iced::ContentFit::Cover).filter_method(iced::widget::image::FilterMethod::Nearest).width(200).height(100);
+    button(
+        column![
+            stack![container(img).clip(true).style(|_| container::Style { border: iced::border::rounded(6), ..Default::default() }), container(library::edition_badge(w)).padding(6)],
+            text(w.summary.name.clone()).size(13).font(style::BOLD),
+            text(w.last_modified.map(worlds::relative_time).unwrap_or_default()).size(11).color(style::muted()),
+        ]
+        .spacing(6),
+    )
+    .padding(8)
+    .width(216)
+    .on_press(Message::OpenWorld(App::MapViewer, w.origin.clone()))
+    .style(style::button_style(Btn::Card))
+    .into()
+}
+
+pub fn view<'a>(worlds: &'a [WorldEntry], s: &'a Settings, scanning: bool) -> Element<'a, Message> {
+    let tools = App::ALL.iter().fold(row![].spacing(12), |r, &a| r.push(tool_card(a)));
+    let recent: Element<'a, Message> = if worlds.is_empty() {
+        text(if scanning { "Scanning launcher folders…" } else { "No worlds found yet — add a folder in Settings or open one from the top bar." }).size(12).color(style::muted()).into()
+    } else {
+        scrollable(worlds.iter().take(8).fold(row![].spacing(12), |r, w| r.push(recent_card(w, s))).padding([0, 0]))
+            .direction(scrollable::Direction::Horizontal(scrollable::Scrollbar::new().width(4).scroller_width(4)))
+            .into()
+    };
+    let mut launchers: Vec<(crate::sources::Launcher, String, usize)> = Vec::new();
+    for w in worlds {
+        match launchers.iter_mut().find(|(l, _, _)| *l == w.launcher) {
+            Some(e) => e.2 += 1,
+            None => launchers.push((w.launcher, w.launcher.name().to_string(), 1)),
+        }
+    }
+    let launcher_row = launchers.into_iter().fold(row![].spacing(8), |r, (l, name, n)| {
+        r.push(
+            button(row![assets::icon(library::launcher_icon(l), 16.0), text(name).size(12), text(n.to_string()).size(12).color(style::muted())].spacing(8).align_y(Alignment::Center))
+                .padding([8, 12])
+                .on_press(Message::LibraryLauncher(l))
+                .style(style::button_style(Btn::Card)),
+        )
+    });
+    let fav_count = worlds.iter().filter(|w| s.is_favorite(&w.origin)).count();
+    let body = column![
+        hero(worlds),
+        section_title("TOOLS", None),
+        tools,
+        section_title("JUMP BACK IN", Some(("See all worlds →", Message::Nav(Page::Library)))),
+        recent,
+        section_title("DETECTED LAUNCHERS", None),
+        launcher_row.wrap().vertical_spacing(8),
+        text(if fav_count > 0 { format!("{fav_count} starred world(s) — star more from the library to pin them first.") } else { "Tip: star worlds in the library to pin them to the top.".into() }).size(11).color(style::hint()),
+    ]
+    .spacing(16)
+    .padding(24);
+    scrollable(body).height(Length::Fill).into()
+}
+
+/// A tool's landing page: hero strip + library targeted at the tool.
+pub fn tool_page<'a>(app: App, lib: &'a Library, worlds: &'a [WorldEntry], s: &'a Settings, scanning: bool, opening: bool) -> Element<'a, Message> {
+    let read_only = if app.read_only() { "Opens worlds in place, read-only." } else { "Works on a copy — your world changes only when you Save." };
+    let head = container(
+        row![
+            assets::block(app.block(), 84.0),
+            column![
+                {
+                    let mut r = row![assets::heading(&app.name().to_uppercase(), style::fg(), 3)].spacing(10).align_y(Alignment::Center);
+                    if app.alpha() {
+                        r = r.push(style::alpha_badge());
+                    }
+                    r
+                },
+                text(app.tagline()).size(13).color(style::muted()),
+                text(read_only).size(11).color(style::hint()),
+            ]
+            .spacing(8)
+            .width(Length::Fill),
+            column![
+                button(row![assets::icon(Icon::Folder, 16.0), text("Open folder…").size(12)].spacing(6).align_y(Alignment::Center)).width(170).padding([8, 12]).on_press(Message::BrowseFolder(app)).style(style::button_style(Btn::Standard)),
+                button(row![assets::icon(Icon::Archive, 16.0), text(".mcworld / .zip…").size(12)].spacing(6).align_y(Alignment::Center)).width(170).padding([8, 12]).on_press(Message::BrowseArchive(app)).style(style::button_style(Btn::Standard)),
+            ]
+            .spacing(6),
+        ]
+        .spacing(20)
+        .align_y(Alignment::Center),
+    )
+    .padding(18)
+    .style(style::card());
+    column![head, library::view(lib, worlds, s, Some(app), scanning, opening)].spacing(16).padding(24).into()
 }

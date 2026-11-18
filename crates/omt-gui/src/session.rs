@@ -21,18 +21,65 @@ pub fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> im
 /// The UMT apps a world can be opened in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum App {
+    MapViewer,
+    WorldEditor,
     NbtEditor,
     Converter,
     Pruner,
 }
 
 impl App {
+    pub const ALL: [App; 5] = [Self::MapViewer, Self::WorldEditor, Self::NbtEditor, Self::Converter, Self::Pruner];
+
     pub const fn name(self) -> &'static str {
         match self {
+            Self::MapViewer => "Map Viewer",
+            Self::WorldEditor => "World Editor",
             Self::NbtEditor => "NBT Editor",
             Self::Converter => "Converter",
             Self::Pruner => "Pruner",
         }
+    }
+
+    pub const fn icon(self) -> omt_art::Icon {
+        match self {
+            Self::MapViewer => omt_art::Icon::Map,
+            Self::WorldEditor => omt_art::Icon::Editor,
+            Self::NbtEditor => omt_art::Icon::NbtEditor,
+            Self::Converter => omt_art::Icon::Converter,
+            Self::Pruner => omt_art::Icon::Pruner,
+        }
+    }
+
+    /// Hero block of the tool's landing page.
+    pub const fn block(self) -> omt_art::Material {
+        match self {
+            Self::MapViewer => omt_art::Material::GrassTop,
+            Self::WorldEditor => omt_art::Material::Amethyst,
+            Self::NbtEditor => omt_art::Material::Planks,
+            Self::Converter => omt_art::Material::Copper,
+            Self::Pruner => omt_art::Material::DiamondOre,
+        }
+    }
+
+    pub const fn tagline(self) -> &'static str {
+        match self {
+            Self::MapViewer => "Explore any world in 2D: styles, sun lighting, night glow, caves, slime chunks, players, bookmarks and PNG export. Opens worlds in place, read-only — nothing is copied.",
+            Self::WorldEditor => "ALPHA — experimental. Edit the world itself, Amulet-style: select a box on the map, then Fill, Replace, Clear, Analyze, Copy / Paste and export or import .mcstructure / Java structure files — with undo, on a safe workspace copy.",
+            Self::NbtEditor => "Edit the raw saved data of your worlds: world settings, players, entities, chunks and LevelDB keys — with undo/redo, search, copy/paste and a chunk locator.",
+            Self::Converter => "Convert worlds between Java and Bedrock (latest versions) with skip-partial-chunks, game mode and per-dimension options; settings and game rules carried over.",
+            Self::Pruner => "Select and remove unwanted parts of your worlds with layered Box, Circle, Polygon, Split and Time selections, then Optimize.",
+        }
+    }
+
+    /// Experimental feature (labelled ALPHA in the UI).
+    pub const fn alpha(self) -> bool {
+        matches!(self, Self::WorldEditor)
+    }
+
+    /// Opens the world in place (read-only) instead of a workspace copy.
+    pub const fn read_only(self) -> bool {
+        matches!(self, Self::MapViewer)
     }
 }
 
@@ -51,6 +98,15 @@ impl Store {
             omt_world::Detected::BedrockFolder { .. } => {
                 Ok(Self::Bedrock(Arc::new(BedrockWorld::open_writable(root).map_err(|e| e.to_string())?)))
             }
+            omt_world::Detected::Archive(p) => Err(format!("{} is an archive", p.display())),
+        }
+    }
+
+    /// Open without write access (viewers; safe while the game runs).
+    pub fn open_read_only(root: &Path) -> Result<Self, String> {
+        match omt_world::detect(root).map_err(|e| e.to_string())? {
+            omt_world::Detected::JavaFolder { .. } => Ok(Self::Java(Arc::new(JavaWorld::open(root).map_err(|e| e.to_string())?))),
+            omt_world::Detected::BedrockFolder { .. } => Ok(Self::Bedrock(Arc::new(BedrockWorld::open_read_only(root).map_err(|e| e.to_string())?))),
             omt_world::Detected::Archive(p) => Err(format!("{} is an archive", p.display())),
         }
     }
@@ -85,6 +141,10 @@ pub struct WorldSession {
     pub title: String,
     /// Unsaved modifications exist in the workspace.
     pub modified: bool,
+    /// The original location (equals `root()` for in-place sessions).
+    origin_path: PathBuf,
+    /// Opened in place, read-only (no workspace copy).
+    pub in_place: bool,
 }
 
 impl std::fmt::Debug for WorldSession {
@@ -96,6 +156,13 @@ impl std::fmt::Debug for WorldSession {
 impl WorldSession {
     /// Copy/extract the world and open its store (blocking).
     pub fn open(app: App, origin: &Path, base: &Path) -> Result<Self, String> {
+        if app.read_only() && origin.is_dir() {
+            let detected = omt_world::detect(origin).map_err(|e| e.to_string())?;
+            let summary = WorldSummary::from_detected(&detected).map_err(|e| e.to_string())?;
+            let store = Store::open_read_only(origin)?;
+            let title = summary.name.clone();
+            return Ok(Self { app, workspace: None, store: Some(store), summary, title, modified: false, origin_path: origin.to_path_buf(), in_place: true });
+        }
         let ws = Workspace::open(origin, base).map_err(|e| e.to_string())?;
         let detected = omt_world::detect(ws.root()).map_err(|e| e.to_string())?;
         let summary = WorldSummary::from_detected(&detected).map_err(|e| e.to_string())?;
@@ -107,15 +174,15 @@ impl WorldSession {
             }
         };
         let title = summary.name.clone();
-        Ok(Self { app, workspace: Some(ws), store: Some(store), summary, title, modified: false })
+        Ok(Self { app, workspace: Some(ws), store: Some(store), summary, title, modified: false, origin_path: origin.to_path_buf(), in_place: false })
     }
 
     pub fn root(&self) -> PathBuf {
-        self.workspace.as_ref().map(|w| w.root().to_path_buf()).unwrap_or_default()
+        self.workspace.as_ref().map(|w| w.root().to_path_buf()).unwrap_or_else(|| self.origin_path.clone())
     }
 
     pub fn origin(&self) -> PathBuf {
-        self.workspace.as_ref().map(|w| w.origin().to_path_buf()).unwrap_or_default()
+        self.workspace.as_ref().map(|w| w.origin().to_path_buf()).unwrap_or_else(|| self.origin_path.clone())
     }
 
     pub fn edition(&self) -> Edition {
@@ -126,6 +193,9 @@ impl WorldSession {
     /// kept), reopen. Blocking. Fails if a background job still holds the
     /// store.
     pub fn save(&mut self) -> Result<PathBuf, String> {
+        if self.in_place {
+            return Err("this world is open read-only (viewer); nothing to save".into());
+        }
         self.release_store()?;
         let result = self.workspace.as_ref().ok_or("no workspace")?.save().map_err(|e| e.to_string());
         self.store = Some(Store::open(&self.root())?);
@@ -136,6 +206,9 @@ impl WorldSession {
 
     /// Export a copy (folder or `.mcworld`/`.zip`) without touching the origin.
     pub fn save_as(&mut self, dest: &Path) -> Result<(), String> {
+        if self.in_place {
+            return Err("this world is open read-only (viewer); export the map instead".into());
+        }
         self.release_store()?;
         let result = self.workspace.as_ref().ok_or("no workspace")?.save_as(dest).map_err(|e| e.to_string());
         self.store = Some(Store::open(&self.root())?);

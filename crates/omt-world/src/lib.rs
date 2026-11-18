@@ -4,12 +4,15 @@
 //! latest-only scope: both editions share the 1.18+ coordinate space
 //! (Y −64..319), so no height shifting exists anywhere in the tool.
 
+pub mod chunkset;
 pub mod detect;
+pub mod sysmem;
 pub mod packing;
 pub mod path;
 pub mod store;
 pub mod workspace;
 
+pub use chunkset::ChunkSet;
 pub use detect::{detect, java_spawn_xz, Detected, WorldSummary, WorldSource};
 pub use packing::{
     pack_java_biome_cells, pack_java_heightmap, pack_java_indices, pack_java_packed,

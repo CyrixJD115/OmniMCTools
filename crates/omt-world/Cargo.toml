@@ -12,5 +12,8 @@ omt-versions.workspace = true
 thiserror.workspace = true
 zip.workspace = true
 
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
+
 [lints]
 workspace = true

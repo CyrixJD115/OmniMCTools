@@ -1,0 +1,18 @@
+[package]
+name = "omt-texpack"
+description = "Bedrock resource packs for OmniMCTools: installed-game pack stacks (loose + .brarchive), block face textures, opt-in bedrock-samples download"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-art.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+png = "0.18"
+ureq = "2"
+
+[lints]
+workspace = true

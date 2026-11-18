@@ -1,53 +1,73 @@
 //! `omt-gui` — OmniMCTools desktop application (Iced 0.14).
 //!
-//! Shell (UMT layout): Home with the three app tiles → pick a world →
-//! a *session* tab per opened world (NBT Editor / Converter / Pruner) that
-//! works on a workspace copy with Save / Save As / Close, plus standalone
-//! NBT file tabs and a Settings page. This module only routes messages.
+//! Frame: top bar + collapsible side rail + page + status bar (`shell`).
+//! Pages: Home dashboard, the Worlds library (filters, search syntax),
+//! tool landing pages (Map Viewer, NBT Editor, Converter, Pruner), open
+//! world sessions and NBT file tabs, Settings, Extensions. Editors work on
+//! a workspace copy (Save / Save As / Close); the Map Viewer opens worlds
+//! in place, read-only. This module owns state and routes messages.
 
+mod appearance;
+mod assets;
 mod converter;
 mod dictionary;
 mod editor;
 mod editor_view;
 mod extensions;
+mod filter;
+mod handlers;
 mod home;
 mod ldb_view;
+mod library;
 mod locator;
+mod mapconfig;
 mod mapdata;
+mod maplook;
+mod maptile;
 mod mapview;
+mod mapview_overlay;
 mod nbt_session;
 mod pruner;
 mod rows;
 mod session;
 mod settings;
 mod settings_view;
+mod shell;
+mod sources;
 mod style;
+mod textures;
+mod viewer;
+mod viewer_3d;
+mod viewer_3d_ctl;
+mod viewer_3d_input;
+mod viewer_blocks;
+mod viewer_export;
+mod viewer_tex;
+mod viewer_view;
+mod world_edit;
+mod world_edit_3d;
+mod world_edit_view;
 mod world_settings;
 mod worlds;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use iced::widget::{button, column, container, row, scrollable, space, text};
-use iced::{Color, Element, Length, Subscription, Task};
+use iced::widget::{column, container, row, space, text};
+use iced::{Alignment, Element, Length, Subscription, Task};
 use omt_script::Manager;
 
 use converter::{ConvMsg, ConverterState};
 use editor::{EditorMsg, EditorTab};
 use extensions::ExtMsg;
+use library::{LibMsg, Library};
 use nbt_session::{NbtMsg, NbtSession};
 use pruner::{PrunerMsg, PrunerState};
 use session::{App, WorldSession, blocking};
 use settings::Settings;
 use settings_view::SettingsMsg;
 
-pub(crate) use style::{ACCENT, MUTED};
-/// Added tags.
-pub(crate) const ADDED: Color = style::SUCCESS;
-/// Edited tags.
-pub(crate) const EDITED: Color = style::WARN;
-/// Current search hit.
-pub(crate) const HIT: Color = style::ACCENT;
+use viewer::{ViewerMsg, ViewerState};
 
 fn main() -> iced::Result {
     iced::application(OmniMCTools::new, OmniMCTools::update, OmniMCTools::view)
@@ -55,8 +75,13 @@ fn main() -> iced::Result {
         .theme(|_s: &OmniMCTools| style::omnitheme())
         .scale_factor(|s: &OmniMCTools| s.settings.scale_factor)
         .subscription(OmniMCTools::subscription)
-        .window(iced::window::Settings { size: iced::Size::new(1280.0, 800.0), ..Default::default() })
+        .window(iced::window::Settings { size: iced::Size::new(1440.0, 900.0), min_size: Some(iced::Size::new(960.0, 600.0)), icon: app_icon(), ..Default::default() })
         .run()
+}
+
+fn app_icon() -> Option<iced::window::Icon> {
+    let img = omt_art::app_icon(64);
+    iced::window::icon::from_rgba(img.rgba, img.w, img.h).ok()
 }
 
 /// Session payload carried through messages (sessions are not `Clone`).
@@ -70,10 +95,27 @@ fn take<T>(s: &Slot<T>) -> Option<T> {
     s.lock().ok().and_then(|mut g| g.take())
 }
 
+/// Every navigable page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    Home,
+    Library,
+    Tool(App),
+    Settings,
+    Extensions,
+    Doc(usize),
+    Session(usize),
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
-    // Home / navigation
-    ChooseApp(App),
+    Nav(Page),
+    ToggleRail,
+    SetTheme(style::ThemeKind),
+    GlobalSearch(String),
+    Lib(LibMsg),
+    LibraryLauncher(sources::Launcher),
+    Tex(appearance::TexMsg),
     Rescan,
     Scanned(Vec<worlds::WorldEntry>),
     OpenWorld(App, PathBuf),
@@ -81,22 +123,20 @@ pub enum Message {
     BrowseArchive(App),
     Picked(App, Option<PathBuf>),
     SessionOpened(App, PathBuf, Result<Slot<WorldSession>, String>),
-    GoHome,
     OpenSettings,
-    OpenExtensions,
     Ext(ExtMsg),
     Settings(SettingsMsg),
     // Standalone NBT files
     PickFile,
     FilePicked(Option<PathBuf>),
-    SelectDoc(usize),
     CloseDoc(usize),
     Doc(usize, EditorMsg),
     // World sessions
-    SelectSession(usize),
     Nbt(usize, NbtMsg),
     Prune(usize, PrunerMsg),
     Conv(usize, ConvMsg),
+    View(usize, ViewerMsg),
+    Edit(usize, world_edit::EditMsg),
     SaveSession(usize),
     SaveAsSession(usize),
     SaveAsPicked(usize, Option<PathBuf>),
@@ -113,6 +153,8 @@ enum Ui {
     Nbt(Box<NbtSession>),
     Pruner(Box<PrunerState>),
     Converter(Box<ConverterState>),
+    Viewer(Box<ViewerState>),
+    Editor(Box<world_edit::EditorState>),
 }
 
 struct SessionTab {
@@ -125,15 +167,6 @@ struct SessionTab {
     confirm_close: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Screen {
-    Home,
-    Settings,
-    Extensions,
-    Doc(usize),
-    Session(usize),
-}
-
 struct OmniMCTools {
     settings: Settings,
     settings_draft: Settings,
@@ -141,18 +174,21 @@ struct OmniMCTools {
     ext: Arc<Manager>,
     ext_status: String,
     worlds: Vec<worlds::WorldEntry>,
+    library: Library,
     scanning: bool,
     opening: bool,
-    picker: Option<App>,
     docs: Vec<EditorTab>,
     sessions: Vec<SessionTab>,
-    screen: Screen,
+    screen: Page,
     status: String,
+    tex: appearance::TexState,
 }
 
 impl OmniMCTools {
     fn new() -> (Self, Task<Message>) {
         let settings = Settings::load();
+        style::set_theme(settings.theme);
+        mapdata::set_config(settings.map_config());
         let ext_root = settings::config_dir().join("extensions");
         let mut app = Self {
             settings_draft: settings.clone(),
@@ -160,38 +196,54 @@ impl OmniMCTools {
             ext_status: String::new(),
             settings,
             worlds: Vec::new(),
+            library: Library::default(),
             scanning: false,
             opening: false,
-            picker: None,
             docs: Vec::new(),
             sessions: Vec::new(),
-            screen: Screen::Home,
+            screen: Page::Home,
             status: "ready — everything stays on this computer".into(),
+            tex: appearance::TexState::default(),
         };
         // `omt-gui [FILE…]` opens each path as a document tab;
-        // `omt-gui --app nbt|pruner|converter WORLD` opens a world session;
-        // `omt-gui --extensions` opens the Extensions page directly.
+        // `omt-gui --app map|nbt|pruner|converter WORLD` opens a world;
+        // `omt-gui --page worlds|settings|extensions|map|…` opens a page.
         let mut args = std::env::args_os().skip(1);
         let mut launch = None;
-        let mut open_extensions = false;
         while let Some(arg) = args.next() {
             if arg == "--app" {
-                let app_kind = match args.next().and_then(|a| a.into_string().ok()).as_deref() {
+                let kind = match args.next().and_then(|a| a.into_string().ok()).as_deref() {
+                    Some("map" | "viewer") => App::MapViewer,
+                    Some("edit" | "editor") => App::WorldEditor,
                     Some("nbt") => App::NbtEditor,
                     Some("pruner") => App::Pruner,
                     Some("converter") => App::Converter,
                     other => {
-                        app.status = format!("--app expects nbt, pruner or converter (got {other:?})");
+                        app.status = format!("--app expects map, nbt, pruner or converter (got {other:?})");
                         continue;
                     }
                 };
                 if let Some(world) = args.next() {
-                    launch = Some((app_kind, PathBuf::from(world)));
+                    launch = Some((kind, PathBuf::from(world)));
                 }
                 continue;
             }
             if arg == "--extensions" {
-                open_extensions = true;
+                app.screen = Page::Extensions;
+                continue;
+            }
+            if arg == "--page" {
+                app.screen = match args.next().and_then(|a| a.into_string().ok()).as_deref() {
+                    Some("worlds" | "library") => Page::Library,
+                    Some("settings") => Page::Settings,
+                    Some("extensions") => Page::Extensions,
+                    Some("map") => Page::Tool(App::MapViewer),
+                    Some("editor") => Page::Tool(App::WorldEditor),
+                    Some("nbt") => Page::Tool(App::NbtEditor),
+                    Some("converter") => Page::Tool(App::Converter),
+                    Some("pruner") => Page::Tool(App::Pruner),
+                    _ => Page::Home,
+                };
                 continue;
             }
             let path = PathBuf::from(arg);
@@ -199,31 +251,29 @@ impl OmniMCTools {
                 Ok(mut tab) => {
                     tab.set_extensions(app.ext.clone());
                     app.docs.push(tab);
+                    app.screen = Page::Doc(app.docs.len() - 1);
                 }
                 Err(e) => app.status = format!("open failed: {e}"),
             }
         }
-        if !app.docs.is_empty() {
-            app.screen = Screen::Doc(0);
-        }
-        if open_extensions {
-            app.screen = Screen::Extensions;
-        }
         let scan = app.rescan();
+        let tex = app.load_textures();
         let open = match launch {
             Some((kind, world)) => app.open_session(kind, world),
             None => Task::none(),
         };
-        (app, Task::batch([scan, open]))
+        (app, Task::batch([scan, tex, open]))
     }
 
     fn title(&self) -> String {
         let t = match self.screen {
-            Screen::Doc(i) => self.docs.get(i).map(|d| d.title.clone()),
-            Screen::Session(i) => self.sessions.get(i).map(|s| format!("{} — {}", s.title, s.app.name())),
-            Screen::Settings => Some("Settings".into()),
-            Screen::Extensions => Some("Extensions".into()),
-            Screen::Home => None,
+            Page::Doc(i) => self.docs.get(i).map(|d| d.title.clone()),
+            Page::Session(i) => self.sessions.get(i).map(|s| format!("{} — {}", s.title, s.app.name())),
+            Page::Settings => Some("Settings".into()),
+            Page::Extensions => Some("Extensions".into()),
+            Page::Library => Some("Worlds".into()),
+            Page::Tool(a) => Some(a.name().into()),
+            Page::Home => None,
         };
         match t {
             Some(t) => format!("{t} — OmniMCTools"),
@@ -233,16 +283,39 @@ impl OmniMCTools {
 
     fn rescan(&mut self) -> Task<Message> {
         self.scanning = true;
-        let folders = worlds::scan_folders(&self.settings);
-        Task::perform(blocking(move || worlds::discover(&folders)), Message::Scanned)
+        let roots = worlds::scan_roots(&self.settings);
+        Task::perform(blocking(move || worlds::discover(&roots)), Message::Scanned)
+    }
+
+    fn save_settings(&mut self) {
+        // Keep the Settings page draft in step with changes made elsewhere.
+        self.settings_draft.favorites = self.settings.favorites.clone();
+        self.settings_draft.bookmarks = self.settings.bookmarks.clone();
+        self.settings_draft.viewer = self.settings.viewer;
+        self.settings_draft.theme = self.settings.theme;
+        self.settings_draft.rail_collapsed = self.settings.rail_collapsed;
+        self.settings_draft.library_grid = self.settings.library_grid;
+        self.settings_draft.library_sort = self.settings.library_sort;
+        self.settings_draft.recent = self.settings.recent.clone();
+        self.settings_draft.texture_pack = self.settings.texture_pack.clone();
+        self.settings_draft.covers = self.settings.covers.clone();
+        self.settings_draft.pruner_look = self.settings.pruner_look;
+        if let Err(e) = self.settings.save() {
+            self.status = format!("could not save settings: {e}");
+        }
     }
 
     fn open_session(&mut self, app: App, path: PathBuf) -> Task<Message> {
         if self.opening {
             return Task::none();
         }
+        // Already open in this app → just switch to it.
+        if let Some(i) = self.sessions.iter().position(|s| s.app == app && s.sess.as_ref().is_some_and(|x| x.origin() == path)) {
+            self.screen = Page::Session(i);
+            return Task::none();
+        }
         self.opening = true;
-        self.status = format!("opening {} in the {}…", path.display(), app.name());
+        self.status = if app.read_only() { format!("opening {} in the {}…", path.display(), app.name()) } else { format!("copying {} into a workspace for the {}…", path.display(), app.name()) };
         let base = self.settings.workspace_base();
         let p2 = path.clone();
         Task::perform(blocking(move || WorldSession::open(app, &p2, &base).map(slot)), move |r| Message::SessionOpened(app, path.clone(), r))
@@ -250,15 +323,64 @@ impl OmniMCTools {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::ChooseApp(app) => {
-                self.picker = Some(app);
-                self.screen = Screen::Home;
+            Message::Nav(p) => {
+                if p == Page::Settings {
+                    self.settings_draft = self.settings.clone();
+                }
+                if p == Page::Extensions {
+                    self.ext.reload();
+                    self.ext_status.clear();
+                }
+                self.screen = p;
             }
+            Message::ToggleRail => {
+                self.settings.rail_collapsed = !self.settings.rail_collapsed;
+                self.save_settings();
+            }
+            Message::SetTheme(t) => {
+                self.settings.theme = t;
+                style::set_theme(t);
+                self.save_settings();
+            }
+            Message::GlobalSearch(q) => {
+                self.library.update(LibMsg::Query(q), &mut self.settings);
+                self.library.refresh(&self.worlds, &self.settings);
+                if !matches!(self.screen, Page::Library | Page::Tool(_)) {
+                    self.screen = Page::Library;
+                }
+            }
+            Message::Lib(LibMsg::PickCover(world)) => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new().set_title("Choose a cover image").add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "gif"]).pick_file().await.map(|h| h.path().to_path_buf())
+                    },
+                    move |p| match p {
+                        Some(img) => Message::Lib(LibMsg::SetCover(world.clone(), Some(img))),
+                        None => Message::Picked(App::MapViewer, None),
+                    },
+                );
+            }
+            Message::Lib(m) => {
+                if self.library.update(m, &mut self.settings) {
+                    self.save_settings();
+                }
+                self.library.refresh(&self.worlds, &self.settings);
+            }
+            Message::LibraryLauncher(l) => {
+                self.library.facets = filter::Facets::default();
+                self.library.facets.launchers.insert(l);
+                self.library.show_filters = true;
+                self.library.refresh(&self.worlds, &self.settings);
+                self.screen = Page::Library;
+            }
+            Message::Tex(m) => return self.on_tex(m),
             Message::Rescan => return self.rescan(),
             Message::Scanned(w) => {
                 self.scanning = false;
-                self.status = format!("{} world(s) found", w.len());
+                let launchers = w.iter().map(|e| e.launcher).collect::<std::collections::BTreeSet<_>>().len();
+                self.status = format!("{} world(s) found across {launchers} launcher(s)", w.len());
                 self.worlds = w;
+                self.library.refresh(&self.worlds, &self.settings);
             }
             Message::OpenWorld(app, p) => return self.open_session(app, p),
             Message::BrowseFolder(app) => {
@@ -287,24 +409,14 @@ impl OmniMCTools {
                 match res.map(|s| take(&s)) {
                     Ok(Some(sess)) => {
                         self.settings.push_recent(path);
-                        let _ = self.settings.save();
-                        self.settings_draft.recent = self.settings.recent.clone();
+                        self.save_settings();
                         return self.add_session(app, sess);
                     }
                     Ok(None) => {}
                     Err(e) => self.status = format!("could not open the world: {e}"),
                 }
             }
-            Message::GoHome => self.screen = Screen::Home,
-            Message::OpenSettings => {
-                self.settings_draft = self.settings.clone();
-                self.screen = Screen::Settings;
-            }
-            Message::OpenExtensions => {
-                self.ext.reload();
-                self.ext_status.clear();
-                self.screen = Screen::Extensions;
-            }
+            Message::OpenSettings => return self.update(Message::Nav(Page::Settings)),
             Message::Ext(m) => return self.on_ext(m),
             Message::Settings(m) => return self.on_settings(m),
             Message::PickFile => {
@@ -324,22 +436,21 @@ impl OmniMCTools {
                 Ok(mut tab) => {
                     tab.set_extensions(self.ext.clone());
                     self.docs.push(tab);
-                    self.screen = Screen::Doc(self.docs.len() - 1);
+                    self.screen = Page::Doc(self.docs.len() - 1);
                     self.status = format!("opened {}", path.display());
                 }
                 Err(e) => self.status = format!("open failed: {e}"),
             },
             Message::FilePicked(None) => {}
-            Message::SelectDoc(i) => self.screen = Screen::Doc(i),
             Message::CloseDoc(i) => {
                 if i < self.docs.len() {
                     if self.docs[i].is_dirty() && !self.docs[i].status.starts_with("unsaved") {
                         self.docs[i].status = "unsaved changes — press ✕ again to discard them".into();
-                        self.screen = Screen::Doc(i);
+                        self.screen = Page::Doc(i);
                         return Task::none();
                     }
                     self.docs.remove(i);
-                    self.screen = Screen::Home;
+                    self.screen = Page::Home;
                 }
             }
             Message::Doc(i, m) => {
@@ -349,15 +460,26 @@ impl OmniMCTools {
                     return Task::batch(tasks.into_iter().map(move |t| t.map(move |m| Message::Doc(i, m))));
                 }
             }
-            Message::SelectSession(i) => self.screen = Screen::Session(i),
             Message::Nbt(i, m) => {
+                if let nbt_session::NbtMsg::Loc(locator::LocMsg::MapUi(u)) = &m {
+                    self.apply_map_ui(*u);
+                }
                 if let Some(SessionTab { sess: Some(sess), ui: Ui::Nbt(ui), .. }) = self.sessions.get_mut(i) {
                     return ui.update(sess, m).map(move |m| Message::Nbt(i, m));
                 }
             }
             Message::Prune(i, m) => {
+                if let PrunerMsg::MapUi(u) = &m {
+                    self.apply_map_ui(*u);
+                }
+                let look_change = matches!(m, PrunerMsg::Look(_));
                 if let Some(SessionTab { sess: Some(sess), ui: Ui::Pruner(ui), .. }) = self.sessions.get_mut(i) {
-                    return ui.update(sess, m).map(move |m| Message::Prune(i, m));
+                    let t = ui.update(sess, m).map(move |m| Message::Prune(i, m));
+                    if look_change {
+                        self.settings.pruner_look = ui.look;
+                        self.save_settings();
+                    }
+                    return t;
                 }
             }
             Message::Conv(i, m) => {
@@ -366,18 +488,37 @@ impl OmniMCTools {
                     return ui.update(sess, base, m).map(move |m| Message::Conv(i, m));
                 }
             }
+            Message::View(i, m) => {
+                if let ViewerMsg::MapUi(u) = &m {
+                    self.apply_map_ui(*u);
+                }
+                let marks_before = self.settings.bookmarks.len();
+                let mut task = Task::none();
+                let mut prefs = None;
+                if let Some(SessionTab { sess: Some(sess), ui: Ui::Viewer(ui), .. }) = self.sessions.get_mut(i) {
+                    task = ui.update(sess, &mut self.settings.bookmarks, m).map(move |m| Message::View(i, m));
+                    prefs = Some(ui.prefs);
+                }
+                if let Some(p) = prefs
+                    && (p != self.settings.viewer || marks_before != self.settings.bookmarks.len())
+                {
+                    self.settings.viewer = p;
+                    self.save_settings();
+                }
+                return task;
+            }
+            Message::Edit(i, m) => {
+                if let Some(SessionTab { sess: Some(sess), ui: Ui::Editor(ui), .. }) = self.sessions.get_mut(i) {
+                    return ui.update(sess, m).map(move |m| Message::Edit(i, m));
+                }
+            }
             Message::SaveSession(i) => return self.save_session(i, None),
             Message::SaveAsSession(i) => {
                 let bedrock = self.sessions.get(i).and_then(|s| s.sess.as_ref()).is_some_and(|s| s.edition() == omt_world::Edition::Bedrock);
                 return Task::perform(
                     async move {
                         let d = rfd::AsyncFileDialog::new().set_title("Save a copy of the world");
-                        if bedrock {
-                            d.add_filter("Bedrock world", &["mcworld"]).save_file().await
-                        } else {
-                            d.save_file().await
-                        }
-                        .map(|h| h.path().to_path_buf())
+                        if bedrock { d.add_filter("Bedrock world", &["mcworld"]).save_file().await } else { d.save_file().await }.map(|h| h.path().to_path_buf())
                     },
                     move |p| Message::SaveAsPicked(i, p),
                 );
@@ -392,36 +533,9 @@ impl OmniMCTools {
                         Ok(m) => m,
                         Err(e) => format!("save failed: {e}"),
                     };
-                    // The store was reopened: the Pruner/Locator map tiles
-                    // still reflect the saved state, nothing to reload.
                 }
             }
-            Message::CloseSession(i) => {
-                if let Some(tab) = self.sessions.get_mut(i) {
-                    let unsaved_docs = match &tab.ui {
-                        Ui::Nbt(n) => n.dirty_docs(),
-                        _ => 0,
-                    };
-                    let modified = tab.sess.as_ref().is_some_and(|s| s.modified) || unsaved_docs > 0;
-                    if tab.busy.is_some() {
-                        self.status = "wait for the current job to finish".into();
-                        return Task::none();
-                    }
-                    if modified && !tab.confirm_close {
-                        tab.confirm_close = true;
-                        self.status = "this world has unsaved changes — press Close again to discard them".into();
-                        self.screen = Screen::Session(i);
-                        return Task::none();
-                    }
-                    let tab = self.sessions.remove(i);
-                    if let Some(sess) = tab.sess {
-                        // Deleting a large workspace can take a while.
-                        std::thread::spawn(move || sess.close());
-                    }
-                    self.screen = Screen::Home;
-                    self.status = "world closed (workspace copy discarded)".into();
-                }
-            }
+            Message::CloseSession(i) => return self.close_session(i),
             Message::FocusSearch => return iced::widget::operation::focus(editor_view::search_id()),
             Message::HotkeyUndo | Message::HotkeyRedo | Message::HotkeySave => {
                 let em = match message {
@@ -430,8 +544,8 @@ impl OmniMCTools {
                     _ => EditorMsg::Save,
                 };
                 match self.screen {
-                    Screen::Doc(i) => return self.update(Message::Doc(i, em)),
-                    Screen::Session(i) => {
+                    Page::Doc(i) => return self.update(Message::Doc(i, em)),
+                    Page::Session(i) => {
                         if let Some(SessionTab { ui: Ui::Nbt(ui), .. }) = self.sessions.get(i)
                             && let Some(d) = ui.active_doc()
                         {
@@ -445,6 +559,39 @@ impl OmniMCTools {
         Task::none()
     }
 
+    fn close_session(&mut self, i: usize) -> Task<Message> {
+        let Some(tab) = self.sessions.get_mut(i) else { return Task::none() };
+        let unsaved_docs = match &tab.ui {
+            Ui::Nbt(n) => n.dirty_docs(),
+            _ => 0,
+        };
+        let modified = tab.sess.as_ref().is_some_and(|s| s.modified) || unsaved_docs > 0;
+        if tab.busy.is_some() {
+            self.status = "wait for the current job to finish".into();
+            return Task::none();
+        }
+        if modified && !tab.confirm_close {
+            tab.confirm_close = true;
+            self.status = "this world has unsaved changes — press Close again to discard them".into();
+            self.screen = Page::Session(i);
+            return Task::none();
+        }
+        let tab = self.sessions.remove(i);
+        let in_place = tab.sess.as_ref().is_some_and(|s| s.in_place);
+        if let Some(sess) = tab.sess {
+            // Deleting a large workspace can take a while.
+            std::thread::spawn(move || sess.close());
+        }
+        // Indices after `i` shifted down.
+        self.screen = match self.screen {
+            Page::Session(j) if j > i => Page::Session(j - 1),
+            Page::Session(_) => Page::Tool(tab.app),
+            other => other,
+        };
+        self.status = if in_place { "world closed".into() } else { "world closed (workspace copy discarded)".into() };
+        Task::none()
+    }
+
     fn add_session(&mut self, app: App, sess: WorldSession) -> Task<Message> {
         let i = self.sessions.len();
         let title = sess.title.clone();
@@ -452,232 +599,68 @@ impl OmniMCTools {
             App::NbtEditor => (Ui::Nbt(Box::new(NbtSession::new(&sess, self.settings.nether_slicer, self.ext.clone()))), Task::none()),
             App::Pruner => {
                 let mut p = PrunerState::new(0);
+                p.set_look(self.settings.pruner_look);
                 let t = p.load(&sess).map(move |m| Message::Prune(i, m));
                 (Ui::Pruner(Box::new(p)), t)
             }
             App::Converter => (Ui::Converter(Box::new(ConverterState::new(&sess, self.settings.skip_partial_chunks))), Task::none()),
+            App::WorldEditor => {
+                let mut e = world_edit::EditorState::new();
+                let t = e.load(&sess).map(move |m| Message::Edit(i, m));
+                (Ui::Editor(Box::new(e)), t)
+            }
+            App::MapViewer => {
+                let mut v = ViewerState::new(&sess, self.settings.viewer);
+                let t = v.load(&sess).map(move |m| Message::View(i, m));
+                (Ui::Viewer(Box::new(v)), t)
+            }
         };
         self.sessions.push(SessionTab { sess: Some(sess), ui, title, app, busy: None, confirm_close: false });
-        self.screen = Screen::Session(i);
-        self.status = format!("opened in the {} — you are editing a copy; Save writes it back", app.name());
+        self.screen = Page::Session(i);
+        self.status = if app.read_only() { format!("opened in the {} (read-only, in place)", app.name()) } else { format!("opened in the {} — you are editing a copy; Save writes it back", app.name()) };
         task
     }
 
-    fn save_session(&mut self, i: usize, dest: Option<PathBuf>) -> Task<Message> {
-        let Some(tab) = self.sessions.get_mut(i) else { return Task::none() };
-        let Some(mut sess) = tab.sess.take() else { return Task::none() };
-        tab.busy = Some(if dest.is_some() { "Exporting…".into() } else { "Saving…".into() });
-        tab.confirm_close = false;
-        Task::perform(
-            blocking(move || {
-                let res = match &dest {
-                    Some(d) => sess.save_as(d).map(|()| format!("exported a copy to {}", d.display())),
-                    None => sess.save().map(|b| format!("saved — previous version kept at {}", b.display())),
-                };
-                (slot(sess), res)
-            }),
-            move |(s, r)| Message::SessionSaved(i, s, r),
-        )
-    }
-
-    /// Extensions-page message handling. Mutations bump the manager
-    /// revision, so every open editor tab re-runs its extension pass on the
-    /// next rebuild.
-    fn on_ext(&mut self, m: ExtMsg) -> Task<Message> {
-        match &m {
-            ExtMsg::Back => {
-                self.screen = Screen::Home;
-                return Task::none();
-            }
-            ExtMsg::PickZip => {
-                return Task::perform(
-                    async {
-                        rfd::AsyncFileDialog::new()
-                            .set_title("Install an extension")
-                            .add_filter("OMT extension", &["zip"])
-                            .pick_file()
-                            .await
-                            .map(|h| h.path().to_path_buf())
-                    },
-                    |p| Message::Ext(ExtMsg::ZipPicked(p)),
-                );
-            }
-            ExtMsg::ZipPicked(None) => return Task::none(),
-            _ => {}
-        }
-        let (status, _changed) = extensions::handle(&self.ext, &m);
-        if !status.is_empty() {
-            self.ext_status = status;
-        }
-        Task::none()
-    }
-
-    fn on_settings(&mut self, m: SettingsMsg) -> Task<Message> {
-        match m {
-            SettingsMsg::Back => self.screen = Screen::Home,
-            SettingsMsg::Save => {
-                self.settings = self.settings_draft.clone();
-                self.status = match self.settings.save() {
-                    Ok(()) => "settings saved".into(),
-                    Err(e) => format!("could not save settings: {e}"),
-                };
-                return self.rescan();
-            }
-            SettingsMsg::PickWorkingDir => {
-                return Task::perform(
-                    async { rfd::AsyncFileDialog::new().set_title("Working directory").pick_folder().await.map(|h| h.path().to_path_buf()) },
-                    |p| Message::Settings(SettingsMsg::WorkingDirPicked(p)),
-                );
-            }
-            SettingsMsg::AddFolder => {
-                return Task::perform(
-                    async { rfd::AsyncFileDialog::new().set_title("Add a worlds folder").pick_folder().await.map(|h| h.path().to_path_buf()) },
-                    |p| Message::Settings(SettingsMsg::FolderPicked(p)),
-                );
-            }
-            other => {
-                settings_view::apply(&mut self.settings_draft, &other);
-                // Scale previews live.
-                if let SettingsMsg::Scale(v) = other {
-                    self.settings.scale_factor = v;
-                }
-            }
-        }
-        Task::none()
-    }
-
     fn subscription(&self) -> Subscription<Message> {
-        iced::event::listen_with(handle_hotkey)
+        let mut subs = vec![iced::event::listen_with(handlers::handle_hotkey)];
+        if self.tex.download.is_some() {
+            subs.push(iced::time::every(std::time::Duration::from_millis(250)).map(|_| Message::Tex(appearance::TexMsg::Tick)));
+        }
+        // 3D camera movement ticks (keys held / mouse captured).
+        for (i, tab) in self.sessions.iter().enumerate() {
+            if let Ui::Viewer(ui) = &tab.ui {
+                subs.push(ui.subscription().with(i).map(|(i, m)| Message::View(i, m)));
+            }
+        }
+        Subscription::batch(subs)
     }
 
     fn view(&self) -> Element<'_, Message> {
-        column![self.tab_bar(), container(self.body()).height(Length::Fill), self.status_bar()].width(Length::Fill).into()
-    }
-
-    fn tab_bar(&self) -> Element<'_, Message> {
-        let mut bar = row![row![text("Omni").size(17).color(style::ACCENT), text("MCTools").size(17)].padding([0, 6])]
-            .spacing(8)
-            .align_y(iced::Alignment::Center);
-        bar = bar.push(tab_chip("🏠 Home", self.screen == Screen::Home, false, Message::GoHome, None));
-        for (i, s) in self.sessions.iter().enumerate() {
-            let dirty = s.sess.as_ref().is_some_and(|x| x.modified);
-            let icon = match s.app {
-                App::NbtEditor => "🗂",
-                App::Converter => "⇄",
-                App::Pruner => "✂",
-            };
-            bar = bar.push(tab_chip(&format!("{icon} {}", s.title), self.screen == Screen::Session(i), dirty, Message::SelectSession(i), Some(Message::CloseSession(i))));
-        }
-        for (i, d) in self.docs.iter().enumerate() {
-            bar = bar.push(tab_chip(&format!("📄 {}", d.title), self.screen == Screen::Doc(i), d.is_dirty(), Message::SelectDoc(i), Some(Message::CloseDoc(i))));
-        }
-        container(scrollable(container(bar).padding([8, 12])).direction(scrollable::Direction::Horizontal(scrollable::Scrollbar::new().width(4).scroller_width(4))))
-            .style(|_| container::Style { background: Some(iced::Background::Color(style::BG)), ..Default::default() })
-            .into()
+        let page = container(self.body()).width(Length::Fill).height(Length::Fill).style(style::page());
+        column![self.top_bar(), row![self.rail(), page].height(Length::Fill), self.status_bar()].width(Length::Fill).into()
     }
 
     fn body(&self) -> Element<'_, Message> {
         match self.screen {
-            Screen::Home => home::view(&self.worlds, self.picker, self.scanning, self.opening, &self.settings.recent),
-            Screen::Settings => settings_view::view(&self.settings_draft, self.settings_draft != self.settings).map(Message::Settings),
-            Screen::Extensions => extensions::view(&self.ext, &self.ext_status),
-            Screen::Doc(i) => match self.docs.get(i) {
+            Page::Home => home::view(&self.worlds, &self.settings, self.scanning),
+            Page::Library => column![
+                row![assets::heading("WORLDS", style::fg(), 3), space::horizontal(), text(format!("{} worlds", self.worlds.len())).size(12).color(style::muted())].align_y(Alignment::Center),
+                library::view(&self.library, &self.worlds, &self.settings, None, self.scanning, self.opening),
+            ]
+            .spacing(16)
+            .padding(24)
+            .into(),
+            Page::Tool(app) => home::tool_page(app, &self.library, &self.worlds, &self.settings, self.scanning, self.opening),
+            Page::Settings => settings_view::view(&self.settings_draft, self.settings_draft != self.settings, self.appearance()),
+            Page::Extensions => extensions::view(&self.ext, &self.ext_status),
+            Page::Doc(i) => match self.docs.get(i) {
                 Some(tab) => container(editor_view::view(tab, std::rc::Rc::new(move |m| Message::Doc(i, m)))).padding(8).into(),
                 None => space::vertical().into(),
             },
-            Screen::Session(i) => match self.sessions.get(i) {
+            Page::Session(i) => match self.sessions.get(i) {
                 Some(tab) => self.session_view(i, tab),
                 None => space::vertical().into(),
             },
         }
     }
-
-    fn session_view<'a>(&'a self, i: usize, tab: &'a SessionTab) -> Element<'a, Message> {
-        let Some(sess) = tab.sess.as_ref() else {
-            return container(text(tab.busy.clone().unwrap_or_default()).color(style::WARN)).center(Length::Fill).into();
-        };
-        let modified = if sess.modified { text("● unsaved changes").size(12).color(style::WARN) } else { text("no unsaved changes").size(12).color(style::MUTED) };
-        let header = container(
-            row![
-                column![
-                    text(format!("{} — {}", tab.title, tab.app.name())).size(16),
-                    text(format!("{} · {} · editing a copy of {}", sess.edition().name(), style::version_label(&sess.summary), sess.origin().display())).size(11).color(style::MUTED),
-                ]
-                .spacing(2),
-                space::horizontal(),
-                modified,
-                button(text("Save").size(13)).on_press_maybe((tab.app != App::Converter && tab.busy.is_none()).then_some(Message::SaveSession(i))).style(style::button_style(style::Btn::Confirm)),
-                button(text("Save As…").size(13)).on_press_maybe((tab.app != App::Converter && tab.busy.is_none()).then_some(Message::SaveAsSession(i))).style(style::button_style(style::Btn::Standard)),
-                button(text("Close").size(13)).on_press(Message::CloseSession(i)).style(style::button_style(style::Btn::Danger)),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
-        )
-        .padding([8, 12])
-        .style(style::panel());
-        let body: Element<'a, Message> = match &tab.ui {
-            Ui::Nbt(ui) => ui.view(sess).map(move |m| Message::Nbt(i, m)),
-            Ui::Pruner(ui) => ui.view(sess).map(move |m| Message::Prune(i, m)),
-            Ui::Converter(ui) => ui.view(sess).map(move |m| Message::Conv(i, m)),
-        };
-        let status = match &tab.ui {
-            Ui::Pruner(p) => p.status.clone(),
-            Ui::Nbt(n) => n.status.clone(),
-            Ui::Converter(_) => String::new(),
-        };
-        let mut col = column![header, container(body).height(Length::Fill)];
-        if !status.is_empty() {
-            col = col.push(container(text(status).size(12).color(style::MUTED)).padding([4, 12]));
-        }
-        col.into()
-    }
-
-    fn status_bar(&self) -> Element<'_, Message> {
-        row![
-            text(self.status.clone()).size(12).color(MUTED),
-            space::horizontal(),
-            text("Ctrl+Z undo · Ctrl+Y redo · Ctrl+S save · Ctrl+F find · offline, no account").size(12).color(style::HINT),
-        ]
-        .padding([6, 12])
-        .spacing(16)
-        .into()
-    }
-}
-
-/// Tab-bar chip with an optional ✕ close button.
-fn tab_chip(title: &str, active: bool, dirty: bool, select: Message, close: Option<Message>) -> Element<'static, Message> {
-    let dot = if dirty { " ●" } else { "" };
-    let chip = button(text(format!("{title}{dot}")).size(13)).on_press(select).style(style::button_style(style::Btn::Ghost)).padding([6, 10]);
-    let chip: Element<'static, Message> = if active { container(chip).style(style::card_selected()).into() } else { container(chip).into() };
-    let mut cell = row![chip].spacing(2).align_y(iced::Alignment::Center);
-    if let Some(close_msg) = close {
-        cell = cell.push(button(text("✕").size(11)).on_press(close_msg).style(style::button_style(style::Btn::Ghost)).padding([6, 4]));
-    }
-    cell.into()
-}
-
-fn handle_hotkey(event: iced::Event, status: iced::event::Status, _window: iced::window::Id) -> Option<Message> {
-    use iced::keyboard::{Key, Modifiers};
-    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event else {
-        return None;
-    };
-    if status == iced::event::Status::Captured {
-        return None;
-    }
-    let ctrl = modifiers.contains(Modifiers::CTRL) && !modifiers.contains(Modifiers::SHIFT);
-    let ctrl_shift = modifiers.contains(Modifiers::CTRL) && modifiers.contains(Modifiers::SHIFT);
-    let char_key = |c: &str| key == Key::Character(c.into());
-    if ctrl && (char_key("z") || char_key("Z")) {
-        return Some(Message::HotkeyUndo);
-    }
-    if (ctrl_shift && (char_key("z") || char_key("Z"))) || (ctrl && (char_key("y") || char_key("Y"))) {
-        return Some(Message::HotkeyRedo);
-    }
-    if ctrl && (char_key("s") || char_key("S")) {
-        return Some(Message::HotkeySave);
-    }
-    if ctrl && (char_key("f") || char_key("F")) {
-        return Some(Message::FocusSearch);
-    }
-    None
 }

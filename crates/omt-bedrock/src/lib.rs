@@ -1,9 +1,11 @@
 //! `omt-bedrock` — Bedrock world storage for OmniMCTools.
 
+pub mod index;
 pub mod keys;
 pub mod store;
 pub mod subchunk;
 
+pub use index::{ColumnIndex, ColumnInfo, DimIndex};
 pub use keys::DbKey;
 pub use store::{BedrockWorld, ColumnRecords, DeleteStats};
 pub use subchunk::{Data3d, Subchunk};

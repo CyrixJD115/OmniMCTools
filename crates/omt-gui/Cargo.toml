@@ -11,6 +11,8 @@ name = "omt-gui"
 path = "src/main.rs"
 
 [dependencies]
+# Pointer lock for 3D mouse-look (vendored + patched, see vendor/iced_winit).
+iced_winit = "0.14"
 bedrock-leveldb.workspace = true
 rayon = "1"
 omt-nbt.workspace = true
@@ -22,8 +24,13 @@ omt-convert.workspace = true
 omt-prune.workspace = true
 omt-render.workspace = true
 omt-script.workspace = true
+omt-art.workspace = true
+omt-texpack.workspace = true
+omt-edit.workspace = true
+omt-gpu.workspace = true
 iced.workspace = true
 rfd = "0.17"
+png = "0.18"
 serde.workspace = true
 toml = "0.8"
 serde_json.workspace = true

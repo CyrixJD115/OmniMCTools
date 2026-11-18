@@ -382,7 +382,7 @@ impl NbtSession {
             side = side.push(nav("🔎  LevelDB Search", Page::LevelDb));
         }
         if !self.docs.is_empty() {
-            side = side.push(text("Open documents").size(12).color(style::MUTED));
+            side = side.push(text("Open documents").size(12).color(style::muted()));
             for (i, d) in self.docs.iter().enumerate() {
                 let dot = if d.is_dirty() { " ●" } else { "" };
                 side = side.push(
@@ -403,9 +403,9 @@ impl NbtSession {
         let sidebar = column![
             side,
             iced::widget::rule::horizontal(1.0),
-            text(format!("World files ({})", self.entries.len())).size(12).color(style::MUTED),
+            text(format!("World files ({})", self.entries.len())).size(12).color(style::muted()),
             scrollable(files).height(Length::Fill),
-            text(self.status.clone()).size(11).color(style::WARN),
+            text(self.status.clone()).size(11).color(style::warn()),
         ]
         .spacing(6)
         .padding(8)

@@ -750,12 +750,22 @@ fn get_table_entry_impl(
     Ok(found)
 }
 
+/// Per-key result of a batched table probe. `Deleted` (a tombstone in this
+/// table) is distinct from `Absent` so callers stop searching older tables
+/// — otherwise a deleted record would resurrect from an older table (OMT patch).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TableLookup {
+    Absent,
+    Deleted,
+    Value(Bytes),
+}
+
 pub(crate) fn get_table_entries(
     path: &Path,
     keys: &[Bytes],
     paranoid_checks: bool,
     cache: Option<&NativeBlockCache>,
-) -> Result<Vec<Option<Bytes>>> {
+) -> Result<Vec<TableLookup>> {
     get_table_entries_impl(path, keys, paranoid_checks, cache)
         .map_err(|error| with_table_path(error, path))
 }
@@ -765,7 +775,7 @@ fn get_table_entries_impl(
     keys: &[Bytes],
     paranoid_checks: bool,
     cache: Option<&NativeBlockCache>,
-) -> Result<Vec<Option<Bytes>>> {
+) -> Result<Vec<TableLookup>> {
     if keys.is_empty() {
         return Ok(Vec::new());
     }
@@ -777,11 +787,11 @@ fn get_table_entries_impl(
     for (index, key) in keys.iter().enumerate() {
         requested.entry(key.to_vec()).or_default().push(index);
     }
-    let mut results = vec![None; keys.len()];
+    let mut results = vec![TableLookup::Absent; keys.len()];
     for_each_custom_table_entry_bytes(path, &bytes, paranoid_checks, |entry_key, value| {
         if let Some(indexes) = requested.remove(entry_key) {
             for index in indexes {
-                results[index] = Some(value.clone());
+                results[index] = TableLookup::Value(value.clone());
             }
             if requested.is_empty() {
                 return Ok(VisitorControl::Stop);
@@ -1260,14 +1270,14 @@ fn get_native_table_entries_seeked(
     keys: &[Bytes],
     paranoid_checks: bool,
     cache: Option<&NativeBlockCache>,
-) -> Result<Vec<Option<Bytes>>> {
+) -> Result<Vec<TableLookup>> {
     let mut file = open_table_file(path, cache)?;
     let index_entries = read_native_index_entries(&mut file, path, paranoid_checks, cache)?;
     let mut requested = BTreeMap::<Vec<u8>, Vec<usize>>::new();
     for (index, key) in keys.iter().enumerate() {
         requested.entry(key.to_vec()).or_default().push(index);
     }
-    let mut results = vec![None; keys.len()];
+    let mut results = vec![TableLookup::Absent; keys.len()];
 
     for entry in index_entries.iter() {
         let Some((largest_key, _)) = split_internal_key(entry.key.as_ref()) else {
@@ -1292,11 +1302,13 @@ fn get_native_table_entries_seeked(
                 return Ok(VisitorControl::Stop);
             }
             if let Some(indexes) = requested.remove(user_key) {
-                if is_value {
-                    let value = data_block.slice(value_range);
-                    for index in indexes {
-                        results[index] = Some(value.clone());
-                    }
+                let found = if is_value {
+                    TableLookup::Value(data_block.slice(value_range))
+                } else {
+                    TableLookup::Deleted
+                };
+                for index in indexes {
+                    results[index] = found.clone();
                 }
                 if requested.is_empty() {
                     return Ok(VisitorControl::Stop);

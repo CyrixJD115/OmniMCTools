@@ -17,6 +17,10 @@ omt-java = { path = "crates/omt-java" }
 omt-convert = { path = "crates/omt-convert" }
 omt-prune = { path = "crates/omt-prune" }
 omt-render = { path = "crates/omt-render" }
+omt-art = { path = "crates/omt-art" }
+omt-texpack = { path = "crates/omt-texpack" }
+omt-edit = { path = "crates/omt-edit" }
+omt-gpu = { path = "crates/omt-gpu" }
 omt-script = { path = "crates/omt-script" }
 omt-cli = { path = "crates/omt-cli" }
 omt-gui = { path = "crates/omt-gui" }
@@ -43,3 +47,9 @@ all = { level = "warn", priority = -1 }
 # sorted tables instead of one whole-database table — see vendor/bedrock-leveldb/OMT_PATCH.md.
 [patch.crates-io]
 bedrock-leveldb = { path = "vendor/bedrock-leveldb" }
+# Vendored (MIT) with an OMT patch: images honor the layer clip — see
+# vendor/iced_tiny_skia/OMT_PATCH.md.
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
+# Vendored (MIT) with an OMT patch: pointer lock + raw mouse motion for 3D
+# mouse-look — see vendor/iced_winit/OMT_PATCH.md.
+iced_winit = { path = "vendor/iced_winit" }

@@ -6,15 +6,13 @@
 
 use std::collections::HashMap;
 
-use std::collections::HashSet;
-
-use iced::widget::{button, canvas, column, container, pick_list, row, scrollable, text, text_input, toggler};
-use iced::{Element, Length, Size, Task};
+use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input, toggler};
+use iced::{Element, Length, Task};
 use omt_prune::{Layer, Selection, Shape, TimeOp};
 
-use crate::mapdata::{self, MapBuild, MapData, MapScan, TileSource, MAX_INFLIGHT};
-use crate::mapview::{Camera, MapEvent, MapView, Outline, Overlay};
-use crate::session::{WorldSession, blocking};
+use crate::mapdata::{MapController, MapData, MapMsg};
+use crate::mapview::{MapEvent, MapView, Outline, Overlay};
+use crate::session::{Store, WorldSession, blocking};
 use crate::style::{self, Btn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,8 +48,11 @@ pub enum PrunerMsg {
     Map(MapEvent),
     Tool(Tool),
     Dim(u8),
-    ScanReady(u8, Result<MapScan, String>),
-    Tile(u8, (i32, i32), Result<MapBuild, String>),
+    Tiles(MapMsg),
+    /// Map toolbar (applied to settings by the app, then refills here).
+    MapUi(crate::mapdata::MapUiMsg),
+    /// Map look (style, grids, ruler, HUD) — saved by the app.
+    Look(crate::maplook::LookMsg),
     InhabitedReady(Result<HashMap<(i32, i32), i64>, String>),
     SelectLayer(usize),
     ToggleInvert(usize),
@@ -79,12 +80,7 @@ enum Drag {
 }
 
 pub struct PrunerState {
-    pub dim: u8,
-    pub camera: Camera,
-    pub map: Option<MapData>,
-    source: Option<TileSource>,
-    inflight: HashSet<(i32, i32)>,
-    pub loading: bool,
+    pub ctl: MapController,
     tool: Tool,
     pub selection: Selection,
     active: Option<usize>,
@@ -98,18 +94,20 @@ pub struct PrunerState {
     busy: bool,
     pub status: String,
     hover: Option<(f64, f64)>,
-    fitted: bool,
+    /// Map look (style, grids, ruler, HUD).
+    pub look: crate::maplook::MapLook,
+}
+
+/// Pruner render options: relief off (the map look lights the tiles).
+fn pruner_opts(dim: u8) -> omt_render::RenderOptions {
+    omt_render::RenderOptions { relief: false, ..omt_render::RenderOptions::for_dimension(dim) }
 }
 
 impl Default for PrunerState {
     fn default() -> Self {
         Self {
-            dim: 0,
-            camera: Camera::default(),
-            map: None,
-            source: None,
-            inflight: HashSet::new(),
-            loading: false,
+            ctl: MapController::new(0, pruner_opts(0)),
+            look: crate::maplook::MapLook::default(),
             tool: Tool::Box,
             selection: Selection::default(),
             active: None,
@@ -123,7 +121,6 @@ impl Default for PrunerState {
             busy: false,
             status: String::new(),
             hover: None,
-            fitted: false,
         }
     }
 }
@@ -215,23 +212,13 @@ fn set_handle(shape: &mut Shape, h: usize, p: (f64, f64), snap: bool) {
 
 impl PrunerState {
     pub fn new(dim: u8) -> Self {
-        Self { dim, ..Self::default() }
+        Self { ctl: MapController::new(dim, pruner_opts(dim)), ..Self::default() }
     }
 
-    /// Kick off (re)rendering the current dimension (and the Java
-    /// InhabitedTime scan the Time layer needs).
-    pub fn load(&mut self, sess: &WorldSession) -> Task<PrunerMsg> {
-        let Some(store) = sess.store.clone() else { return Task::none() };
-        self.loading = true;
-        self.status = "Scanning chunks…".into();
-        let dim = self.dim;
-        let s2 = store.clone();
-        let render = Task::perform(
-            blocking(move || crate::mapdata::scan(&s2, dim)),
-            move |r| PrunerMsg::ScanReady(dim, r),
-        );
-        let scan = if store.edition() == omt_world::Edition::Java {
-            Task::perform(
+    /// The Java InhabitedTime scan the Time layer needs (Bedrock has none).
+    fn inhabited_scan(store: Option<Store>, dim: u8) -> Task<PrunerMsg> {
+        match store {
+            Some(store) if store.edition() == omt_world::Edition::Java => Task::perform(
                 blocking(move || {
                     store
                         .prune_world()
@@ -240,123 +227,73 @@ impl PrunerState {
                         .map_err(|e| e.to_string())
                 }),
                 PrunerMsg::InhabitedReady,
-            )
-        } else {
-            Task::none()
-        };
-        Task::batch([render, scan])
+            ),
+            _ => Task::none(),
+        }
     }
 
-    /// Build the tiles the camera can see (on demand) and offload far ones.
-    fn refill(&mut self) -> Task<PrunerMsg> {
-        let Some(map) = &mut self.map else { return Task::none() };
-        let Some(src) = self.source.clone() else { return Task::none() };
-        let view = Size::new(900.0, 640.0);
-        let (bx0, bz0, bx1, bz1) = self.camera.visible_blocks(view);
-        let mut want = mapdata::tile_range(bx0, bz0, bx1, bz1);
-        want.0 -= 1;
-        want.1 -= 1;
-        want.2 += 1;
-        want.3 += 1;
-        let center = (((bx0 + bx1) / 2.0).floor() as i32, ((bz0 + bz1) / 2.0).floor() as i32);
-        let center_tile = (center.0.div_euclid(mapdata::TILE_CHUNKS), center.1.div_euclid(mapdata::TILE_CHUNKS));
-        let dropped = map.prune_cache(want, center_tile);
-        if dropped > 0 {
-            self.status = format!("{} tiles cached (offloaded {dropped} off-screen)", map.tiles.len());
+    /// (Re)load the current dimension — `rescan` after the world changed.
+    fn reload(&mut self, sess: &WorldSession, rescan: bool) -> Task<PrunerMsg> {
+        let store = sess.store.clone();
+        let render = self.ctl.load(store.as_ref(), rescan).map(PrunerMsg::Tiles);
+        Task::batch([render, Self::inhabited_scan(store, self.ctl.dim)])
+    }
+
+    pub fn load(&mut self, sess: &WorldSession) -> Task<PrunerMsg> {
+        self.reload(sess, false)
+    }
+
+    /// Status-bar text: the last pruner action plus the map's progress and
+    /// memory state.
+    pub fn status_line(&self) -> String {
+        match (self.status.is_empty(), self.ctl.status.is_empty()) {
+            (true, _) => self.ctl.status.clone(),
+            (false, true) => self.status.clone(),
+            (false, false) => format!("{} — {}", self.status, self.ctl.status),
         }
-        let slots = MAX_INFLIGHT.saturating_sub(self.inflight.len());
-        if slots == 0 {
-            return Task::none();
-        }
-        let next = mapdata::refill_plan(&map.tiles, &self.inflight, want, center_tile, slots);
-        let dim = self.dim;
-        let opts = omt_render::RenderOptions::for_dimension(dim);
-        let mut tasks = Vec::new();
-        for tile in next {
-            self.inflight.insert(tile);
-            let src = src.clone();
-            tasks.push(Task::perform(
-                blocking(move || mapdata::build_tile(&src, dim, opts, tile.0, tile.1)),
-                move |r| PrunerMsg::Tile(dim, tile, r),
-            ));
-        }
-        if !tasks.is_empty() {
-            self.status = format!(
-                "{} tiles built · {} rendering… · {} chunks total",
-                map.tiles.len(),
-                self.inflight.len(),
-                map.chunk_total()
-            );
-        }
-        Task::batch(tasks)
     }
 
     fn recompute(&mut self) {
-        let Some(map) = &self.map else { return };
-        let Some(chunks) = map.scan.as_ref().map(|s| &s.chunks) else { return };
+        let Some(map) = &self.ctl.map else { return };
+        let chunks = map.source.chunks();
         let inh = self.inhabited.as_ref();
         self.red = chunks
             .iter()
-            .copied()
             .filter(|&(x, z)| self.selection.selects(x, z, inh.and_then(|m| m.get(&(x, z)).copied())))
             .collect();
     }
 
     pub fn update(&mut self, sess: &mut WorldSession, msg: PrunerMsg) -> Task<PrunerMsg> {
         match msg {
-            PrunerMsg::Map(ev) => return self.on_map(ev),
+            PrunerMsg::Map(ev) => return self.on_map(ev, sess),
             PrunerMsg::Tool(t) => {
                 self.tool = t;
                 self.polygon.clear();
             }
             PrunerMsg::Dim(d) => {
-                if d != self.dim {
-                    self.dim = d;
-                    self.map = None;
+                if d != self.ctl.dim {
                     self.inhabited = None;
-                    self.fitted = false;
-                    return self.load(sess);
+                    self.red.clear();
+                    let store = sess.store.clone();
+                    let t = self.ctl.set_dim(d, pruner_opts(d), store.as_ref()).map(PrunerMsg::Tiles);
+                    return Task::batch([t, Self::inhabited_scan(store, d)]);
                 }
             }
-            PrunerMsg::ScanReady(dim, res) => {
-                if dim != self.dim {
-                    return Task::none();
-                }
-                self.loading = false;
-                match res {
-                    Ok(scan) => {
-                        let total = scan.chunks.len();
-                        self.source = sess.store.as_ref().map(crate::mapdata::tile_source).transpose().ok().flatten();
-                        self.map = Some(MapData::with_scan(scan));
-                        self.status = format!("{total} chunks · scanned — rendering visible tiles…");
-                        if !self.fitted && let Some(b) = self.map.as_ref().and_then(MapData::chunk_bounds) {
-                            self.camera = Camera::fit(b, Size::new(900.0, 640.0));
-                            self.fitted = true;
-                        }
-                        self.recompute();
-                        return self.refill();
-                    }
-                    Err(e) => self.status = format!("render failed: {e}"),
+            PrunerMsg::MapUi(_) => {
+                return self.ctl.refill(sess.store.as_ref()).map(PrunerMsg::Tiles);
+            }
+            PrunerMsg::Look(m) => {
+                if self.look.apply(m) {
+                    self.ctl.set_post(Some(self.look.style));
                 }
             }
-            PrunerMsg::Tile(dim, tile, res) => {
-                self.inflight.remove(&tile);
-                if dim != self.dim {
-                    return Task::none();
+            PrunerMsg::Tiles(m) => {
+                let was_loaded = self.ctl.map.is_some();
+                let t = self.ctl.on_msg(m, sess.store.as_ref()).map(PrunerMsg::Tiles);
+                if !was_loaded && self.ctl.map.is_some() {
+                    self.recompute();
                 }
-                match res {
-                    Ok(build) => {
-                        let errs = build.errors;
-                        if let Some(map) = &mut self.map {
-                            map.insert(build);
-                        }
-                        if errs > 0 {
-                            self.status = format!("{} tile unreadable chunks (shown as holes)", errs);
-                        }
-                    }
-                    Err(e) => self.status = format!("tile render failed: {e}"),
-                }
-                return self.refill();
+                return t;
             }
             PrunerMsg::InhabitedReady(res) => match res {
                 Ok(m) => {
@@ -411,7 +348,7 @@ impl PrunerState {
                 let Some(store) = sess.store.clone() else { return Task::none() };
                 self.busy = true;
                 self.status = format!("Pruning {} chunks…", self.red.len());
-                let (dim, sel) = (self.dim, self.selection.clone());
+                let (dim, sel) = (self.ctl.dim, self.selection.clone());
                 return Task::perform(
                     blocking(move || {
                         let w = store.prune_world();
@@ -431,10 +368,8 @@ impl PrunerState {
                     Ok(s) => {
                         sess.modified = true;
                         self.status = s;
-                        let status = self.status.clone();
-                        let t = self.load(sess);
-                        self.status = status;
-                        return t;
+                        // The world changed: rebuild the chunk index + tiles.
+                        return self.reload(sess, true);
                     }
                     Err(e) => self.status = format!("prune failed: {e}"),
                 }
@@ -462,25 +397,26 @@ impl PrunerState {
                 }
             }
             PrunerMsg::FitView => {
-                if let Some(b) = self.map.as_ref().and_then(MapData::chunk_bounds) {
-                    self.camera = Camera::fit(b, Size::new(900.0, 640.0));
-                }
+                self.ctl.fit();
+                return self.ctl.refill(sess.store.as_ref()).map(PrunerMsg::Tiles);
             }
         }
         Task::none()
     }
 
-    fn on_map(&mut self, ev: MapEvent) -> Task<PrunerMsg> {
+    fn on_map(&mut self, ev: MapEvent, sess: &WorldSession) -> Task<PrunerMsg> {
+        let store = sess.store.as_ref();
         match ev {
             MapEvent::Pan { dx, dz } => {
-                self.camera.cx += dx;
-                self.camera.cz += dz;
-                self.refill()
+                self.ctl.camera.cx += dx;
+                self.ctl.camera.cz += dz;
+                self.ctl.refill(store).map(PrunerMsg::Tiles)
             }
             MapEvent::Zoom { factor, at } => {
-                self.camera.zoom_at(factor, at);
-                self.refill()
+                self.ctl.camera.zoom_at(factor, at);
+                self.ctl.refill(store).map(PrunerMsg::Tiles)
             }
+            MapEvent::Resize(size) => self.ctl.on_viewport(size, store).map(PrunerMsg::Tiles),
             MapEvent::Hover { at } => {
                 self.hover = Some(at);
                 Task::none()
@@ -498,7 +434,7 @@ impl PrunerState {
                 if let Some(li) = self.active
                     && let Some(layer) = self.selection.layers.get(li)
                 {
-                    let tol = 8.0 / self.camera.zoom as f64;
+                    let tol = 8.0 / self.ctl.camera.zoom as f64;
                     if let Some(h) = handles(&layer.shape)
                         .iter()
                         .position(|p| (p.0 - at.0).abs() <= tol && (p.1 - at.1).abs() <= tol)
@@ -577,7 +513,13 @@ impl PrunerState {
         }
     }
 
-    fn overlay(&self) -> Overlay {
+    /// Use a saved map look (startup).
+    pub fn set_look(&mut self, look: crate::maplook::MapLook) {
+        self.look = look;
+        self.ctl.set_post(Some(look.style));
+    }
+
+    fn overlay(&self, spawn: Option<(i32, i32)>) -> Overlay {
         let mut outlines = Vec::new();
         for (i, l) in self.selection.layers.iter().enumerate() {
             if let Some((points, closed)) = outline(&l.shape) {
@@ -591,12 +533,23 @@ impl PrunerState {
         let caption = match self.hover {
             Some((x, z)) => {
                 let (bx, bz) = (x.floor() as i32, z.floor() as i32);
-                let ident = self.map.as_ref().and_then(|m| m.identify(bx, bz)).map(|(n, y)| format!(" · {n} @ Y {y}")).unwrap_or_default();
+                let ident = self
+                    .ctl
+                    .map
+                    .as_ref()
+                    .and_then(|m| m.identify(bx, bz))
+                    .map(|(n, y, approx)| format!(" · {}{n} @ Y {y}", if approx { "≈ " } else { "" }))
+                    .unwrap_or_default();
                 format!("Block {bx}, {bz} · Chunk {}, {}{ident} · {} selected", bx.div_euclid(16), bz.div_euclid(16), self.red.len())
             }
             None => format!("{} selected", self.red.len()),
         };
-        Overlay { red: self.red.clone(), outlines, marker: None, caption }
+        let look = &self.look;
+        let markers = match (look.spawn && self.ctl.dim == 0, spawn) {
+            (true, Some((x, z))) => vec![crate::mapview::Marker { x: x as f64 + 0.5, z: z as f64 + 0.5, label: "Spawn".into(), icon: None, color: iced::Color::WHITE }],
+            _ => Vec::new(),
+        };
+        Overlay { red: self.red.clone(), outlines, marker: None, caption, markers, chunk_grid: look.chunk_grid, region_grid: look.region_grid, hud: look.hud, ruler: look.ruler, cursor: self.hover, ..Default::default() }
     }
 
     pub fn view<'a>(&'a self, sess: &'a WorldSession) -> Element<'a, PrunerMsg> {
@@ -628,7 +581,7 @@ impl PrunerState {
 
         let layers = self.selection.layers.iter().enumerate().fold(column![].spacing(4), |c, (i, l)| {
             let desc = layer_desc(&l.shape);
-            let head = button(column![text(l.shape.kind()).size(13), text(desc).size(11).color(style::MUTED)])
+            let head = button(column![text(l.shape.kind()).size(13), text(desc).size(11).color(style::muted())])
                 .on_press(PrunerMsg::SelectLayer(i))
                 .width(Length::Fill)
                 .style(style::button_style(if self.active == Some(i) { Btn::Primary } else { Btn::Ghost }));
@@ -647,10 +600,10 @@ impl PrunerState {
                 .style(style::card()),
             )
         });
-        let total = self.map.as_ref().map_or(0, MapData::chunk_total);
+        let total = self.ctl.map.as_ref().map_or(0, MapData::chunk_total);
         let prune_area: Element<'_, PrunerMsg> = if self.confirm {
             column![
-                text(format!("Delete {} of {} chunks (with their entities and POI)?", self.red.len(), total)).size(12).color(style::WARN),
+                text(format!("Delete {} of {} chunks (with their entities and POI)?", self.red.len(), total)).size(12).color(style::warn()),
                 row![
                     button(text("Prune now").size(12)).on_press(PrunerMsg::ConfirmPrune).style(style::button_style(Btn::Danger)),
                     button(text("Cancel").size(12)).on_press(PrunerMsg::CancelPrune).style(style::button_style(Btn::Standard)),
@@ -670,11 +623,11 @@ impl PrunerState {
         let sidebar = column![
             text("Tools").size(14),
             tools,
-            text(self.tool.hint()).size(11).color(style::MUTED),
-            text("Hold Ctrl to disable chunk snapping. Wheel zooms, right/middle-drag pans.").size(11).color(style::HINT),
+            text(self.tool.hint()).size(11).color(style::muted()),
+            text("Hold Ctrl to disable chunk snapping. Wheel zooms, right/middle-drag pans.").size(11).color(style::hint()),
             time_row,
-            text(time_note).size(11).color(style::MUTED),
-            row![optimize, text("Optimize: run a database compaction cycle (Bedrock only).").size(11).color(style::MUTED)].spacing(6).align_y(iced::Alignment::Center),
+            text(time_note).size(11).color(style::muted()),
+            row![optimize, text("Optimize: run a database compaction cycle (Bedrock only).").size(11).color(style::muted())].spacing(6).align_y(iced::Alignment::Center),
             iced::widget::rule::horizontal(1.0),
             row![
                 text(format!("Layers ({})", self.selection.layers.len())).size(14),
@@ -690,21 +643,24 @@ impl PrunerState {
         .padding(10)
         .width(300);
 
-        let dims = dim_switcher(self.dim, PrunerMsg::Dim);
-        let viewer: Element<'_, PrunerMsg> = match &self.map {
-            Some(map) => canvas(MapView { map, camera: self.camera, overlay: self.overlay(), on_event: Box::new(PrunerMsg::Map) })
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            None => container(text(if self.loading { "Rendering map…" } else { "No map" }).color(style::MUTED)).center(Length::Fill).into(),
+        let dims = dim_switcher(self.ctl.dim, PrunerMsg::Dim);
+        let viewer: Element<'_, PrunerMsg> = match &self.ctl.map {
+            Some(map) => crate::mapview::element(MapView { map, camera: self.ctl.camera, overlay: self.overlay(sess.summary.spawn), on_event: Box::new(PrunerMsg::Map) }),
+            None => container(text(if self.ctl.loading { self.ctl.status.as_str() } else { "No map" }).color(style::muted())).center(Length::Fill).into(),
         };
-        let top = row![dims, iced::widget::space::horizontal(), button(text("Fit").size(12)).on_press(PrunerMsg::FitView).style(style::button_style(Btn::Ghost))]
+        let top = row![
+            dims,
+            iced::widget::space::horizontal(),
+            crate::mapdata::controls(PrunerMsg::MapUi),
+            button(text("Fit").size(12)).on_press(PrunerMsg::FitView).style(style::button_style(Btn::Ghost))
+        ]
             .spacing(6)
             .padding([4, 8])
             .align_y(iced::Alignment::Center);
+        let look = container(self.look.toolbar(PrunerMsg::Look)).padding([2, 8]);
         row![
             container(sidebar).height(Length::Fill).style(style::panel()),
-            column![top, viewer].width(Length::Fill),
+            column![top, look, viewer].width(Length::Fill),
         ]
         .height(Length::Fill)
         .into()

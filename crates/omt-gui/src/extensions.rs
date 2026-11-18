@@ -72,7 +72,7 @@ pub fn view<'a>(mgr: &'a Manager, status: &'a str) -> Element<'a, Message> {
             text("🧩 Extensions").size(22),
             text("Lua extensions decorate the NBT editor: extra annotations, descriptions and colors on rows. Extensions run with full trust — install only from sources you trust.")
                 .size(12)
-                .color(style::MUTED),
+                .color(style::muted()),
         ]
         .spacing(4),
         space::horizontal(),
@@ -96,7 +96,7 @@ pub fn view<'a>(mgr: &'a Manager, status: &'a str) -> Element<'a, Message> {
                 text("No extensions installed.").size(14),
                 text("Install a .zip with manifest.json + main.lua, or try the built-in Tick Clock example (tick counters shown as in-game time).")
                     .size(12)
-                    .color(style::MUTED),
+                    .color(style::muted()),
             ]
             .spacing(6),
         )
@@ -110,9 +110,9 @@ pub fn view<'a>(mgr: &'a Manager, status: &'a str) -> Element<'a, Message> {
     };
 
     let footer = if status.is_empty() {
-        text(format!("extensions live in {}", mgr.root().display())).size(11).color(style::HINT)
+        text(format!("extensions live in {}", mgr.root().display())).size(11).color(style::hint())
     } else {
-        text(status).size(12).color(style::ACCENT)
+        text(status).size(12).color(style::accent())
     };
 
     container(column![header, iced::widget::rule::horizontal(1.0), scrollable(list).height(Length::Fill), footer].spacing(14).padding(20))
@@ -136,14 +136,14 @@ fn ext_card<'a>(mgr: &'a Manager, rec: &omt_script::ExtensionRecord, i: usize, t
     let body = column![
         row![
             text(rec.manifest.name.clone()).size(15),
-            if meta.is_empty() { text("").size(11) } else { text(meta).size(11).color(style::MUTED) },
+            if meta.is_empty() { text("").size(11) } else { text(meta).size(11).color(style::muted()) },
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center),
         if rec.manifest.description.is_empty() {
-            text(rec.id.clone()).size(12).color(style::MUTED)
+            text(rec.id.clone()).size(12).color(style::muted())
         } else {
-            text(rec.manifest.description.clone()).size(12).color(style::MUTED)
+            text(rec.manifest.description.clone()).size(12).color(style::muted())
         },
     ]
     .spacing(3);

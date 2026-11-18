@@ -175,19 +175,19 @@ impl ConverterState {
             Step::Save => self.saved_to.is_some(),
         };
         if s == Step::Convert && self.failed.is_some() {
-            ("failed", style::DANGER)
+            ("failed", style::danger())
         } else if s == Step::Convert && self.running {
-            ("in progress", style::WARN)
+            ("in progress", style::warn())
         } else if complete {
-            ("complete", style::SUCCESS)
+            ("complete", style::success())
         } else {
-            ("incomplete", style::HINT)
+            ("incomplete", style::hint())
         }
     }
 
     pub fn view<'a>(&'a self, sess: &'a WorldSession) -> Element<'a, ConvMsg> {
         let steps = [(Step::Output, "OUTPUT"), (Step::Options, "OPTIONS"), (Step::Convert, "CONVERT"), (Step::Save, "SAVE")];
-        let mut bar = row![container(column![text("INPUT").size(12), text("complete").size(10).color(style::SUCCESS)]).padding(8).style(style::card())].spacing(6);
+        let mut bar = row![container(column![text("INPUT").size(12), text("complete").size(10).color(style::success())]).padding(8).style(style::card())].spacing(6);
         for (i, (s, label)) in steps.iter().enumerate() {
             let (b, c) = self.badge(*s);
             bar = bar.push(
@@ -201,14 +201,14 @@ impl ConverterState {
         let body: Element<'a, ConvMsg> = match self.step {
             Step::Output => column![
                 text("Output Edition").size(18),
-                text(format!("Input: {src_desc}")).size(12).color(style::MUTED),
+                text(format!("Input: {src_desc}")).size(12).color(style::muted()),
                 row![edition_card(Edition::Java, self.target), edition_card(Edition::Bedrock, self.target)].spacing(10),
                 text(format!(
                     "Target version: latest ({}). OMT converts latest ⇄ latest only; older worlds should be opened and saved once in the current game first.",
                     if self.target == Edition::Java { format!("Java {}", reg.java_release()) } else { format!("Bedrock {}", reg.bedrock_release) }
                 ))
                 .size(12)
-                .color(style::MUTED),
+                .color(style::muted()),
                 row![space::horizontal(), button(text("Next").size(13)).on_press(ConvMsg::Step(1)).style(style::button_style(Btn::Primary))],
             ]
             .spacing(12)
@@ -227,7 +227,7 @@ impl ConverterState {
                     opt("Dimensions", "Which dimensions to convert.", dims.into()),
                     opt("Game Mode", "Override the game mode of the output world.", gm.into()),
                     opt("World Name", "Name of the output world.", text_input("name", &self.name).on_input(ConvMsg::Name).width(260).style(style::input()).into()),
-                    opt("Depth Fixer / Allow Older Chunk Versions", "Not needed: both latest editions share the Y −64…319 range, so nothing is raised or clipped.", text("n/a").size(12).color(style::MUTED).into()),
+                    opt("Depth Fixer / Allow Older Chunk Versions", "Not needed: both latest editions share the Y −64…319 range, so nothing is raised or clipped.", text("n/a").size(12).color(style::muted()).into()),
                     row![space::horizontal(), button(text("Next").size(13)).on_press(ConvMsg::Step(2)).style(style::button_style(Btn::Primary))],
                 ]
                 .spacing(10)
@@ -246,7 +246,7 @@ impl ConverterState {
                             *kinds.entry(l.kind.label()).or_default() += 1;
                         }
                         let losses = if kinds.is_empty() { "no data loss recorded".to_string() } else { kinds.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join(" · ") };
-                        column![rows, text(format!("Loss ledger: {losses}")).size(11).color(style::MUTED)].spacing(4).into()
+                        column![rows, text(format!("Loss ledger: {losses}")).size(11).color(style::muted())].spacing(4).into()
                     }
                     None => space::vertical().height(0).into(),
                 };
@@ -266,10 +266,10 @@ impl ConverterState {
                     ]
                     .spacing(8)
                     .align_y(iced::Alignment::Center),
-                    text(format!("{} → {}", sess.edition().name(), self.target.name())).size(12).color(style::MUTED),
+                    text(format!("{} → {}", sess.edition().name(), self.target.name())).size(12).color(style::muted()),
                     summary,
                     container(scrollable(log).height(Length::Fill)).padding(8).style(style::card()).height(Length::Fill).width(Length::Fill),
-                    text(self.saved_to.as_ref().map(|p| format!("Saved: {p}")).unwrap_or_default()).size(12).color(style::SUCCESS),
+                    text(self.saved_to.as_ref().map(|p| format!("Saved: {p}")).unwrap_or_default()).size(12).color(style::success()),
                 ]
                 .spacing(10)
                 .into()
@@ -289,8 +289,8 @@ fn edition_card(e: Edition, current: Edition) -> Element<'static, ConvMsg> {
                 Edition::Bedrock => "Windows, Android, iOS, consoles via Realms — saves a .mcworld",
             })
             .size(11)
-            .color(style::MUTED),
-            text(if selected { "✔ output" } else { "this is the input edition" }).size(11).color(if selected { style::SUCCESS } else { style::HINT }),
+            .color(style::muted()),
+            text(if selected { "✔ output" } else { "this is the input edition" }).size(11).color(if selected { style::success() } else { style::hint() }),
         ]
         .spacing(4),
     )
@@ -301,7 +301,7 @@ fn edition_card(e: Edition, current: Edition) -> Element<'static, ConvMsg> {
 }
 
 fn opt<'a>(title: &'a str, desc: &'a str, control: Element<'a, ConvMsg>) -> Element<'a, ConvMsg> {
-    container(row![column![text(title).size(14), text(desc).size(11).color(style::MUTED)].spacing(2).width(Length::Fill), control].spacing(12).align_y(iced::Alignment::Center))
+    container(row![column![text(title).size(14), text(desc).size(11).color(style::muted())].spacing(2).width(Length::Fill), control].spacing(12).align_y(iced::Alignment::Center))
         .padding(10)
         .style(style::card())
         .into()

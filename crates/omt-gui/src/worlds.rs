@@ -1,165 +1,150 @@
-//! World discovery for the Home screen: standard game folders for this OS
-//! plus the user's configured folders. Summaries are read in a background
-//! task so a slow disk never freezes the UI.
+//! World discovery for the library: every launcher folder of this machine
+//! (see [`crate::sources`]) plus the user's folders. Summaries (and folder
+//! sizes) are read on a background thread so a slow disk never freezes
+//! the UI; folders are scanned in parallel.
 
 use std::path::{Path, PathBuf};
 
-use omt_world::WorldSummary;
+use omt_world::{Edition, WorldSummary};
+use rayon::prelude::*;
 
 use crate::settings::Settings;
+use crate::sources::{Launcher, Root};
 
-/// A discovered world plus Home-card extras (UMT's world-list blurb:
-/// `<Mode> Mode, Cheats` + `Last played`).
+/// A discovered world plus library extras.
 #[derive(Debug, Clone)]
 pub struct WorldEntry {
     pub summary: WorldSummary,
     pub origin: PathBuf,
+    /// Launcher + instance/profile label ("Prism · Fabric 1.21").
     pub folder_label: String,
+    pub launcher: Launcher,
+    pub preview: bool,
     pub last_modified: Option<std::time::SystemTime>,
     pub cheats: Option<bool>,
+    /// On-disk size (bytes) of the world folder.
+    pub size: u64,
+    /// Version label shown on cards ("1.21.120" / "26.3 · DataVersion …").
+    pub version: String,
 }
 
-/// Standard per-OS world folders (only those that exist are scanned).
-pub fn standard_folders() -> Vec<(String, PathBuf)> {
-    let mut out = Vec::new();
-    let home = dirs::home_dir();
-    if let Some(h) = &home {
-        out.push(("Java".to_string(), h.join(".minecraft/saves")));
-        out.push(("Bedrock (mcpelauncher)".to_string(), h.join(".local/share/mcpelauncher/games/com.mojang/minecraftWorlds")));
-        // Prism / MultiMC instances: every instance's saves folder.
-        for base in [h.join(".local/share/PrismLauncher/instances"), h.join(".local/share/multimc/instances")] {
-            if let Ok(rd) = std::fs::read_dir(&base) {
-                for e in rd.flatten() {
-                    let saves = e.path().join("minecraft/saves");
-                    let saves = if saves.is_dir() { saves } else { e.path().join(".minecraft/saves") };
-                    out.push((format!("Java ({})", e.file_name().to_string_lossy()), saves));
-                }
-            }
-        }
+impl WorldEntry {
+    pub fn edition(&self) -> Edition {
+        self.summary.edition
     }
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        out.push(("Java".to_string(), PathBuf::from(appdata).join(".minecraft").join("saves")));
-    }
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        out.push((
-            "Bedrock (Windows)".to_string(),
-            PathBuf::from(local)
-                .join("Packages/Microsoft.MinecraftUWP_8wekyb3d8bbwe/LocalState/games/com.mojang/minecraftWorlds"),
-        ));
-    }
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        // Bedrock (GDK builds, 1.21.120+) keep worlds per user id.
-        let base = PathBuf::from(appdata).join("Minecraft Bedrock/Users");
-        if let Ok(rd) = std::fs::read_dir(&base) {
-            for e in rd.flatten() {
-                out.push(("Bedrock (Windows)".to_string(), e.path().join("games/com.mojang/minecraftWorlds")));
-            }
-        }
-    }
-    out
 }
 
-/// Every folder to scan, de-duplicated.
-pub fn scan_folders(settings: &Settings) -> Vec<(String, PathBuf)> {
-    let mut out: Vec<(String, PathBuf)> = Vec::new();
+/// Every folder to scan, de-duplicated (custom folders and the env
+/// override first, then detected launcher folders that exist).
+pub fn scan_roots(settings: &Settings) -> Vec<Root> {
+    let mut out: Vec<Root> = Vec::new();
     if let Some(dir) = std::env::var_os("OMT_WORLDS_DIR") {
-        out.push(("OMT_WORLDS_DIR".into(), PathBuf::from(dir)));
+        out.push(Root { launcher: Launcher::Custom, label: "OMT_WORLDS_DIR".into(), path: PathBuf::from(dir), preview: false });
     }
     for f in &settings.world_folders {
-        out.push(("Custom".into(), f.clone()));
+        let label = f.file_name().map(|n| format!("Custom · {}", n.to_string_lossy())).unwrap_or_else(|| "Custom".into());
+        out.push(Root { launcher: Launcher::Custom, label, path: f.clone(), preview: false });
     }
     if settings.auto_detect_folders {
-        out.extend(standard_folders());
+        let env = |k: &str| std::env::var_os(k);
+        out.extend(crate::sources::standard_roots(dirs::home_dir().as_deref(), &env));
     }
     let mut seen = std::collections::HashSet::new();
-    out.retain(|(_, p)| p.is_dir() && seen.insert(p.canonicalize().unwrap_or_else(|_| p.clone())));
+    out.retain(|r| r.path.is_dir() && seen.insert(r.path.canonicalize().unwrap_or_else(|_| r.path.clone())));
     out
 }
 
-fn entry_for(path: &Path, label: &str) -> Option<WorldEntry> {
+/// Total size of a folder tree (metadata only; symlinks not followed).
+pub fn dir_size(p: &Path) -> u64 {
+    let mut total = 0;
+    let mut stack = vec![p.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                stack.push(e.path());
+            } else if ft.is_file() {
+                total += e.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    total
+}
+
+fn entry_for(path: &Path, root: &Root) -> Option<WorldEntry> {
     let detected = omt_world::detect(path).ok()?;
     let summary = WorldSummary::from_detected(&detected).ok()?;
-    let last_modified = std::fs::metadata(path.join("level.dat")).and_then(|m| m.modified()).ok();
+    // Bedrock bumps `db/` on every save; level.dat is the fallback.
+    let stamp = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let last_modified = [stamp(path.join("level.dat")), stamp(path.join("db")), stamp(path.join("region"))].into_iter().flatten().max();
     let cheats = match &detected {
-        omt_world::Detected::BedrockFolder { level_dat, .. } => {
-            level_dat.nbt.tag.get("commandsEnabled").and_then(|t| t.as_i64()).map(|v| v != 0)
-        }
+        omt_world::Detected::BedrockFolder { level_dat, .. } => level_dat.nbt.tag.get("commandsEnabled").and_then(|t| t.as_i64()).map(|v| v != 0),
         omt_world::Detected::JavaFolder { level_dat, .. } => {
             let data = level_dat.tag.get("Data").unwrap_or(&level_dat.tag);
             data.get("allowCommands").and_then(|t| t.as_i64()).map(|v| v != 0)
         }
         omt_world::Detected::Archive(_) => None,
     };
-    Some(WorldEntry { summary, origin: path.to_path_buf(), folder_label: label.to_string(), last_modified, cheats })
+    let version = crate::style::version_label(&summary);
+    Some(WorldEntry {
+        summary,
+        origin: path.to_path_buf(),
+        folder_label: root.label.clone(),
+        launcher: root.launcher,
+        preview: root.preview,
+        last_modified,
+        cheats,
+        size: dir_size(path),
+        version,
+    })
 }
 
-/// Scan all folders (blocking — call from a background task).
-pub fn discover(folders: &[(String, PathBuf)]) -> Vec<WorldEntry> {
-    let mut out = Vec::new();
-    for (label, dir) in folders {
-        // A folder may itself be a world.
-        if let Some(e) = entry_for(dir, label) {
-            out.push(e);
+/// Scan all roots (blocking — call from a background task).
+pub fn discover(roots: &[Root]) -> Vec<WorldEntry> {
+    let mut candidates: Vec<(PathBuf, &Root)> = Vec::new();
+    for root in roots {
+        if root.path.join("level.dat").is_file() {
+            candidates.push((root.path.clone(), root));
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&root.path) else { continue };
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_dir()
-                && let Some(entry) = entry_for(&p, label)
-            {
-                out.push(entry);
+            if p.is_dir() {
+                candidates.push((p, root));
             }
         }
     }
+    let mut out: Vec<WorldEntry> = candidates.par_iter().filter_map(|(p, r)| entry_for(p, r)).collect();
     out.sort_by_key(|e| std::cmp::Reverse(e.last_modified));
     out
 }
 
-/// UMT-style blurb: "Survival Mode, Cheats".
-pub fn blurb(e: &WorldEntry) -> String {
-    let mode = match e.summary.gamemode {
-        Some(0) => "Survival",
-        Some(1) => "Creative",
-        Some(2) => "Adventure",
-        Some(3) => "Spectator",
-        _ => "Unknown",
-    };
-    match e.cheats {
-        Some(true) => format!("{mode} Mode, Cheats"),
-        _ => format!("{mode} Mode"),
+/// "1.4 GB" style sizes.
+pub fn human_size(b: u64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = b as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
     }
+    if i == 0 { format!("{b} B") } else if v < 10.0 { format!("{v:.1} {}", U[i]) } else { format!("{v:.0} {}", U[i]) }
 }
 
-/// "h:mmam, Mon d, yyyy" in local-agnostic UTC (no tz database offline).
-pub fn format_time(t: std::time::SystemTime) -> String {
-    let secs = t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    let (y, m, d) = civil_from_days(days);
-    let (h, min) = (rem / 3600, (rem % 3600) / 60);
-    let (h12, ap) = match h {
-        0 => (12, "am"),
-        1..=11 => (h, "am"),
-        12 => (12, "pm"),
-        _ => (h - 12, "pm"),
+/// "3 hours ago" style relative time.
+pub fn relative_time(t: std::time::SystemTime) -> String {
+    let secs = std::time::SystemTime::now().duration_since(t).map(|d| d.as_secs()).unwrap_or(0);
+    let (n, unit) = match secs {
+        0..60 => return "just now".into(),
+        60..3600 => (secs / 60, "minute"),
+        3600..86_400 => (secs / 3600, "hour"),
+        86_400..2_592_000 => (secs / 86_400, "day"),
+        2_592_000..31_536_000 => (secs / 2_592_000, "month"),
+        _ => (secs / 31_536_000, "year"),
     };
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    format!("{h12}:{min:02}{ap}, {} {d}, {y} UTC", MONTHS[(m - 1) as usize])
-}
-
-/// Days since 1970-01-01 → (year, month, day) (Howard Hinnant's algorithm).
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
 }
 
 #[cfg(test)]
@@ -167,10 +152,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dates() {
-        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_763_300_000);
-        // 2025-11-16 13:33:20 UTC (verified with `date -u -d @1763300000`).
-        assert_eq!(format_time(t), "1:33pm, Nov 16, 2025 UTC");
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
+    fn sizes() {
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(1536), "1.5 KB");
+        assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.0 GB");
+        assert_eq!(human_size(200 * 1024 * 1024), "200 MB");
     }
+
 }

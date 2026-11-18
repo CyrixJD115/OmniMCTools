@@ -1,0 +1,17 @@
+[package]
+name = "omt-gpu"
+description = "GPU (wgpu, off-screen) 3D terrain rendering for the OmniMCTools Map Viewer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-render.workspace = true
+wgpu = "27"
+pollster = "0.4"
+glam = "0.25"
+bytemuck = "1"
+
+[lints]
+workspace = true

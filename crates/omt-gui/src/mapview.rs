@@ -6,10 +6,10 @@
 //! left = tool input, Ctrl held = disable chunk snapping.
 
 use iced::mouse::{self, Button, Cursor, ScrollDelta};
-use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
+use iced::widget::canvas::{self, Frame, Geometry};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme};
 
-use crate::mapdata::{MapData, TILE_PX};
+use crate::mapdata::MapData;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -27,7 +27,8 @@ impl Default for Camera {
 }
 
 impl Camera {
-    pub const MIN_ZOOM: f32 = 1.0 / 16.0;
+    /// Far enough out for any world (level-of-detail tiles keep it cheap).
+    pub const MIN_ZOOM: f32 = 1.0 / 4096.0;
     pub const MAX_ZOOM: f32 = 32.0;
 
     pub fn to_screen(self, bounds: Size, bx: f64, bz: f64) -> Point {
@@ -80,6 +81,8 @@ pub enum MapEvent {
     Drag { at: (f64, f64), ctrl: bool },
     Release { at: (f64, f64), ctrl: bool },
     Hover { at: (f64, f64) },
+    /// The canvas size changed (tiles are planned for the real viewport).
+    Resize(Size),
 }
 
 /// A shape outline to draw (block coordinates).
@@ -100,6 +103,51 @@ pub struct Overlay {
     pub marker: Option<(i32, i32)>,
     /// Text in the bottom-left corner (cursor coordinates etc.).
     pub caption: String,
+    /// Labeled pins (spawn, players, bookmarks).
+    pub markers: Vec<Marker>,
+    /// Chunk grid: `None` = automatic (when zoomed in), else forced.
+    pub chunk_grid: Option<bool>,
+    /// Region (32×32 chunk) grid.
+    pub region_grid: bool,
+    /// Slime chunks to tint.
+    pub slime: Vec<(i32, i32)>,
+    /// Scale bar + compass.
+    pub hud: bool,
+    /// Textured cells: (cell x, cell z, handle), `textured_cell` blocks wide.
+    pub textured: Vec<(i32, i32, iced::widget::image::Handle)>,
+    pub textured_cell: i32,
+    /// Rulers along the top/left edges.
+    pub ruler: crate::mapview_overlay::Ruler,
+    /// Distance measurement (from, to) in blocks.
+    pub measure: Option<[(f64, f64); 2]>,
+    /// Cursor position (block coordinates) — marked on the rulers.
+    pub cursor: Option<(f64, f64)>,
+}
+
+/// A labeled map pin.
+#[derive(Debug, Clone)]
+pub struct Marker {
+    pub x: f64,
+    pub z: f64,
+    pub label: String,
+    pub icon: Option<iced::widget::image::Handle>,
+    pub color: Color,
+}
+
+/// The map canvas as an element, clipped to its bounds (zoomed-in tiles
+/// extend far past the viewport; unclipped they would paint over the UI).
+///
+/// Overlays (grids, selections, pins, HUD, rulers) are a second canvas
+/// stacked on top: renderers paint a layer's images after its vector
+/// shapes, so overlays drawn into the tiles' own layer ended up *under*
+/// the map.
+pub fn element<'a, M: 'a>(mut mv: MapView<'a, M>) -> iced::Element<'a, M> {
+    let mut ov = std::mem::take(&mut mv.overlay);
+    mv.overlay.textured = std::mem::take(&mut ov.textured);
+    mv.overlay.textured_cell = ov.textured_cell;
+    let top = crate::mapview_overlay::OverlayView { overlay: ov, camera: mv.camera };
+    let fill = iced::Length::Fill;
+    iced::widget::container(iced::widget::stack![iced::widget::canvas(mv).width(fill).height(fill), iced::widget::canvas(top).width(fill).height(fill)]).clip(true).into()
 }
 
 pub struct MapView<'a, M> {
@@ -114,15 +162,21 @@ pub struct ViewState {
     pan_from: Option<Point>,
     left_down: bool,
     ctrl: bool,
+    size: Option<Size>,
 }
 
-const RED: Color = Color { r: 0.86, g: 0.16, b: 0.16, a: 0.42 };
 
 impl<M> canvas::Program<M> for MapView<'_, M> {
     type State = ViewState;
 
     fn update(&self, state: &mut ViewState, event: &iced::Event, bounds: Rectangle, cursor: Cursor) -> Option<canvas::Action<M>> {
         let size = bounds.size();
+        if let iced::Event::Window(_) = event
+            && state.size != Some(size)
+        {
+            state.size = Some(size);
+            return Some(canvas::Action::publish((self.on_event)(MapEvent::Resize(size))));
+        }
         if let iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(m)) = event {
             state.ctrl = m.control();
             return None;
@@ -186,102 +240,67 @@ impl<M> canvas::Program<M> for MapView<'_, M> {
 
     fn draw(&self, _state: &ViewState, renderer: &Renderer, _theme: &Theme, bounds: Rectangle, _cursor: Cursor) -> Vec<Geometry> {
         let size = bounds.size();
-        // Two geometries — iced paints a canvas geometry's images *after* its
-        // vector content regardless of draw order, so tiles and overlays must
-        // not share one: overlays in their own (later) geometry always land
-        // above the rendered map (grid, selection, outlines, caption).
-        let mut tiles = Frame::new(renderer, size);
-        tiles.fill_rectangle(Point::ORIGIN, size, Color::from_rgb8(0x12, 0x14, 0x18));
+        // Layering: iced paints a geometry's images after its vector
+        // content AND batches images by filter mode, so call order inside one
+        // frame is NOT paint order (smooth coarse tiles used to cover crisp
+        // full-detail ones). Geometries are painted in order, so: background,
+        // then one geometry per detail level (coarsest first), then overlays.
+        let mut geoms = Vec::new();
+        let mut bg = Frame::new(renderer, size);
+        bg.fill_rectangle(Point::ORIGIN, size, crate::style::t().map_bg);
+        geoms.push(bg.into_geometry());
         let cam = self.camera;
-        let tile_screen = TILE_PX as f32 * cam.zoom;
-        for (&(rx, rz), tile) in &self.map.tiles {
-            let handle = &tile.handle;
-            let p = cam.to_screen(size, (rx * TILE_PX as i32) as f64, (rz * TILE_PX as i32) as f64);
+        let smooth = crate::mapdata::config().smooth;
+        let mut layer: Option<(u8, Frame)> = None;
+        for (key, tile) in self.map.draw_list() {
+            let Some(handle) = &tile.handle else { continue };
+            let (x0, z0, _, _) = key.chunk_rect();
+            let tile_screen = (key.span_blocks() as f64 * cam.zoom as f64) as f32;
+            let p = cam.to_screen(size, x0 as f64 * 16.0, z0 as f64 * 16.0);
             if p.x > size.width || p.y > size.height || p.x + tile_screen < 0.0 || p.y + tile_screen < 0.0 {
                 continue;
             }
+            if layer.as_ref().is_none_or(|(l, _)| *l != key.level) {
+                if let Some((_, f)) = layer.take() {
+                    geoms.push(f.into_geometry());
+                }
+                layer = Some((key.level, Frame::new(renderer, size)));
+            }
+            // Crisp blocks when magnified at full detail; smooth when the
+            // image is minified or shows reduced (sampled) detail.
+            let minified = tile_screen < tile.px as f32;
             let mut img = canvas::Image::new(handle.clone());
-            img.filter_method = iced::widget::image::FilterMethod::Nearest;
+            img.filter_method = if minified || (smooth && tile.reduced()) {
+                iced::widget::image::FilterMethod::Linear
+            } else {
+                iced::widget::image::FilterMethod::Nearest
+            };
             img.snap = true;
-            tiles.draw_image(Rectangle::new(p, Size::new(tile_screen, tile_screen)), img);
+            if let Some((_, f)) = layer.as_mut() {
+                f.draw_image(Rectangle::new(p, Size::new(tile_screen, tile_screen)), img);
+            }
+        }
+        if let Some((_, f)) = layer.take() {
+            geoms.push(f.into_geometry());
+        }
+        if !self.overlay.textured.is_empty() {
+            let mut tf = Frame::new(renderer, size);
+            let span = self.overlay.textured_cell as f64;
+            let edge = (span * cam.zoom as f64) as f32;
+            for (cx, cz, h) in &self.overlay.textured {
+                let p = cam.to_screen(size, *cx as f64 * span, *cz as f64 * span);
+                if p.x > size.width || p.y > size.height || p.x + edge < 0.0 || p.y + edge < 0.0 {
+                    continue;
+                }
+                let mut img = canvas::Image::new(h.clone());
+                img.filter_method = iced::widget::image::FilterMethod::Nearest;
+                img.snap = true;
+                tf.draw_image(Rectangle::new(p, Size::new(edge, edge)), img);
+            }
+            geoms.push(tf.into_geometry());
         }
 
-        let mut frame = Frame::new(renderer, size);
-        let chunk_px = 16.0 * cam.zoom;
-        // Chunk grid when zoomed in enough to be useful.
-        if chunk_px >= 24.0 {
-            let (x0, z0) = cam.to_block(size, Point::ORIGIN);
-            let (x1, z1) = cam.to_block(size, Point::new(size.width, size.height));
-            let grid = Path::new(|b| {
-                let mut x = (x0 / 16.0).floor() * 16.0;
-                while x <= x1 {
-                    let s = cam.to_screen(size, x, 0.0);
-                    b.move_to(Point::new(s.x, 0.0));
-                    b.line_to(Point::new(s.x, size.height));
-                    x += 16.0;
-                }
-                let mut z = (z0 / 16.0).floor() * 16.0;
-                while z <= z1 {
-                    let s = cam.to_screen(size, 0.0, z);
-                    b.move_to(Point::new(0.0, s.y));
-                    b.line_to(Point::new(size.width, s.y));
-                    z += 16.0;
-                }
-            });
-            frame.stroke(&grid, Stroke::default().with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.08)).with_width(1.0));
-        }
-        if !self.overlay.red.is_empty() {
-            let red = Path::new(|b| {
-                for &(cx, cz) in &self.overlay.red {
-                    let p = cam.to_screen(size, (cx * 16) as f64, (cz * 16) as f64);
-                    if p.x > size.width || p.y > size.height || p.x + chunk_px < 0.0 || p.y + chunk_px < 0.0 {
-                        continue;
-                    }
-                    b.rectangle(p, Size::new(chunk_px.max(1.0), chunk_px.max(1.0)));
-                }
-            });
-            frame.fill(&red, RED);
-        }
-        for o in &self.overlay.outlines {
-            if o.points.len() >= 2 {
-                let path = Path::new(|b| {
-                    let first = cam.to_screen(size, o.points[0].0, o.points[0].1);
-                    b.move_to(first);
-                    for p in &o.points[1..] {
-                        b.line_to(cam.to_screen(size, p.0, p.1));
-                    }
-                    if o.closed {
-                        b.close();
-                    }
-                });
-                let color = if o.active { Color::from_rgb8(0xff, 0xd0, 0x40) } else { Color::from_rgba(1.0, 1.0, 1.0, 0.7) };
-                frame.stroke(&path, Stroke::default().with_color(color).with_width(if o.active { 2.0 } else { 1.0 }));
-            }
-            for h in &o.handles {
-                let p = cam.to_screen(size, h.0, h.1);
-                frame.fill(&Path::circle(p, 5.0), Color::from_rgb8(0xff, 0xff, 0xff));
-                frame.stroke(&Path::circle(p, 5.0), Stroke::default().with_color(Color::from_rgb8(0x22, 0x8b, 0xf6)).with_width(2.0));
-            }
-        }
-        if let Some((cx, cz)) = self.overlay.marker {
-            let p = cam.to_screen(size, (cx * 16) as f64, (cz * 16) as f64);
-            let s = Size::new(chunk_px.max(3.0), chunk_px.max(3.0));
-            // Fill first so the highlight survives even when the tile is
-            // bright; the stroke pins the exact chunk outline.
-            frame.fill(&Path::rectangle(p, s), Color::from_rgba(0.13, 0.55, 0.96, 0.30));
-            frame.stroke(&Path::rectangle(p, s), Stroke::default().with_color(Color::from_rgb8(0x22, 0x8b, 0xf6)).with_width(2.0));
-        }
-        if !self.overlay.caption.is_empty() {
-            frame.fill_rectangle(Point::new(0.0, size.height - 22.0), Size::new(size.width, 22.0), Color::from_rgba(0.0, 0.0, 0.0, 0.55));
-            frame.fill_text(Text {
-                content: self.overlay.caption.clone(),
-                position: Point::new(8.0, size.height - 18.0),
-                color: Color::from_rgb8(0xe8, 0xea, 0xed),
-                size: iced::Pixels(13.0),
-                ..Text::default()
-            });
-        }
-        vec![tiles.into_geometry(), frame.into_geometry()]
+        geoms
     }
 
     fn mouse_interaction(&self, state: &ViewState, bounds: Rectangle, cursor: Cursor) -> mouse::Interaction {

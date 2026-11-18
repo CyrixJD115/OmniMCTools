@@ -42,20 +42,35 @@ pub struct RegionFile {
     /// region-local chunk index (0..1024) → location.
     locations: BTreeMap<u16, Location>,
     timestamps: BTreeMap<u16, u32>,
-    #[allow(dead_code)]
     len: u64,
 }
 
 impl RegionFile {
-    /// Parse the header of an on-disk `.mca` (lenient mode per UMT).
+    /// Parse the header of an on-disk `.mca` (lenient mode per UMT). Reads
+    /// only the 8 KiB header — chunk payloads are fetched on demand.
     pub fn open(path: &Path) -> Result<Self, RegionError> {
-        let bytes = std::fs::read(path)?;
-        Self::from_bytes(path, &bytes)
+        use std::io::Read;
+        let mut file = std::fs::File::open(path)?;
+        let len = file.metadata()?.len();
+        if len < HEADER_BYTES as u64 {
+            return Err(RegionError::TooSmall(len));
+        }
+        let mut header = vec![0u8; HEADER_BYTES];
+        file.read_exact(&mut header)?;
+        Self::from_header(path, &header, len)
     }
 
     pub fn from_bytes(path: &Path, bytes: &[u8]) -> Result<Self, RegionError> {
         if bytes.len() < HEADER_BYTES {
             return Err(RegionError::TooSmall(bytes.len() as u64));
+        }
+        Self::from_header(path, &bytes[..HEADER_BYTES], bytes.len() as u64)
+    }
+
+    /// Parse the 8 KiB header of a region file `file_len` bytes long.
+    pub fn from_header(path: &Path, bytes: &[u8], file_len: u64) -> Result<Self, RegionError> {
+        if bytes.len() < HEADER_BYTES || file_len < HEADER_BYTES as u64 {
+            return Err(RegionError::TooSmall(file_len));
         }
         let mut locations = BTreeMap::new();
         let mut seen_sectors: BTreeMap<u32, u16> = BTreeMap::new();
@@ -67,7 +82,7 @@ impl RegionFile {
             if off == 0 || cnt == 0 {
                 continue;
             }
-            let max_sector = (bytes.len() as u64).div_ceil(SECTOR_BYTES as u64);
+            let max_sector = file_len.div_ceil(SECTOR_BYTES as u64);
             // Invalid offset/overlong entries are dropped (UMT's
             // "Invalid index offset!" behavior); duplicates keep the LAST
             // entry ("Duplicates have been ignored") unless the earlier
@@ -94,7 +109,7 @@ impl RegionFile {
                 timestamps.insert(i as u16, t);
             }
         }
-        Ok(Self { path: path.to_path_buf(), locations, timestamps, len: bytes.len() as u64 })
+        Ok(Self { path: path.to_path_buf(), locations, timestamps, len: file_len })
     }
 
     /// Region coordinates from a file name `r.<x>.<z>.mca`.
@@ -154,7 +169,38 @@ impl RegionFile {
         if end > bytes.len() {
             return Err(RegionError::Corrupt { x, z, reason: format!("sectors {start}..{end} beyond file {}", bytes.len()) });
         }
-        let sector = &bytes[start..end];
+        self.decode_sectors(&bytes[start..end], x, z)
+    }
+
+    /// Raw chunk payload read straight from the file: only the chunk's own
+    /// sectors are read (single-chunk lookups never load the whole region).
+    pub fn read_raw_from_file(&self, x: i32, z: i32) -> Result<Vec<u8>, RegionError> {
+        use std::io::{Read, Seek, SeekFrom};
+        let Some(loc) = self.location(x, z) else {
+            return Err(RegionError::Absent { x, z });
+        };
+        let start = loc.offset_sectors as u64 * SECTOR_BYTES as u64;
+        let end = (start + loc.count_sectors as u64 * SECTOR_BYTES as u64).min(self.len);
+        if start + 5 > end {
+            return Err(RegionError::Corrupt { x, z, reason: format!("sectors {start}..{end} beyond file {}", self.len) });
+        }
+        let mut file = std::fs::File::open(&self.path)?;
+        file.seek(SeekFrom::Start(start))?;
+        let mut buf = vec![0u8; (end - start) as usize];
+        file.read_exact(&mut buf)?;
+        self.decode_sectors(&buf, x, z)
+    }
+
+    /// Parsed chunk NBT read straight from the file (see [`Self::read_raw_from_file`]).
+    pub fn read_chunk_from_file(&self, x: i32, z: i32) -> Result<Nbt, RegionError> {
+        let raw = self.read_raw_from_file(x, z)?;
+        omt_nbt::read(&raw, ByteOrder::Big).map_err(|e| RegionError::Corrupt { x, z, reason: format!("NBT: {e}") })
+    }
+
+    fn decode_sectors(&self, sector: &[u8], x: i32, z: i32) -> Result<Vec<u8>, RegionError> {
+        if sector.len() < 5 {
+            return Err(RegionError::Corrupt { x, z, reason: "truncated sector".into() });
+        }
         let len = u32::from_be_bytes([sector[0], sector[1], sector[2], sector[3]]) as usize;
         let scheme = sector[4];
         if len == 0 {

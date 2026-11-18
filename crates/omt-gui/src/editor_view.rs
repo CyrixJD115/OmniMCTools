@@ -6,7 +6,7 @@ use iced::{Color, Element, Length};
 use crate::dictionary;
 use crate::editor::{ChangeKind, EditorMsg, EditorTab};
 use crate::style::{self, Btn};
-use crate::{ACCENT, ADDED, EDITED, HIT, MUTED};
+
 
 pub enum Id {
     Search,
@@ -32,11 +32,11 @@ pub fn view<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> Element
     let msg = move |m: EditorMsg| w(m);
 
     let dirty = if tab.is_dirty() { "● unsaved" } else { "saved" };
-    let dirty_color = if tab.is_dirty() { EDITED } else { style::SUCCESS };
+    let dirty_color = if tab.is_dirty() { style::warn() } else { style::success() };
     let title = row![
         text(tab.title.clone()).size(14),
         text(dirty).size(11).color(dirty_color),
-        text(tab.doc.format.describe()).size(11).color(MUTED),
+        text(tab.doc.format.describe()).size(11).color(style::muted()),
     ]
     .spacing(10)
     .align_y(iced::Alignment::Center);
@@ -57,7 +57,7 @@ pub fn view<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> Element
     .width(Length::Fill);
 
     let search_row = row![
-        text("Find").size(12).color(MUTED),
+        text("Find").size(12).color(style::muted()),
         text_input("name or value…", &tab.search_input)
             .id(search_id())
             .on_input({ let w = wrap.clone(); move |q| w(EditorMsg::SearchInput(q)) })
@@ -67,7 +67,7 @@ pub fn view<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> Element
         tool_button("Next ▸", Btn::Ghost, Some(msg(EditorMsg::SearchNext))),
         text(format!("{}/{}", tab.search_cursor() + 1, tab.search_hit_count().max(1)))
             .size(12)
-            .color(MUTED),
+            .color(style::muted()),
     ]
     .spacing(8)
     .align_y(iced::Alignment::Center);
@@ -82,7 +82,7 @@ pub fn view<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> Element
         tree = tree.push(
             text(format!("… showing first {} rows — collapse branches to see more", tab.rows.len()))
                 .size(12)
-                .color(MUTED),
+                .color(style::muted()),
         );
     }
 
@@ -98,8 +98,8 @@ pub fn view<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> Element
             scrollable(panel).height(Length::Fill).width(Length::FillPortion(2)),
         ],
         iced::widget::rule::horizontal(1.0),
-        text(tab.status.clone()).size(12).color(MUTED),
-        text(tab.ext_status.clone()).size(11).color(style::HINT),
+        text(tab.status.clone()).size(12).color(style::muted()),
+        text(tab.ext_status.clone()).size(11).color(style::hint()),
     ]
     .spacing(6)
     .padding(8)
@@ -124,9 +124,9 @@ fn row_line<'a, M: Clone + 'a>(r: &'a crate::editor::Row, wrap: Wrap<'a, M>) -> 
     };
     let ext_color = r.extra_color();
     let name_color = match r.changed {
-        Some(ChangeKind::Added) => ADDED,
-        Some(ChangeKind::Edited) => EDITED,
-        None if r.search_hit => HIT,
+        Some(ChangeKind::Added) => style::success(),
+        Some(ChangeKind::Edited) => style::warn(),
+        None if r.search_hit => style::info(),
         None => ext_color.unwrap_or(Color::WHITE),
     };
     let (name, action) = if r.is_container {
@@ -149,28 +149,28 @@ fn row_line<'a, M: Clone + 'a>(r: &'a crate::editor::Row, wrap: Wrap<'a, M>) -> 
     // Friendly label from the dictionary (raw key stays first — editing
     // identity is preserved; known names gain a readable title).
     if let Some(entry) = dictionary::lookup(&r.label) {
-        line = line.push(text(entry.label).size(12).color(style::FG));
+        line = line.push(text(entry.label).size(12).color(style::fg()));
     }
-    line = line.push(text(r.type_name).size(11).color(MUTED));
+    line = line.push(text(r.type_name).size(11).color(style::muted()));
     if let Some(v) = &r.value_snbt {
         let shown: String = v.chars().take(80).collect();
         let more = if v.len() > 80 { "…" } else { "" };
-        let val_color = if r.search_hit { HIT } else { MUTED };
+        let val_color = if r.search_hit { style::info() } else { style::muted() };
         line = line.push(text(format!("{shown}{more}")).size(12).color(val_color));
     }
     if let Some(decoded) = r.value_snbt.as_deref().and_then(|v| dictionary::decode(&r.label, v)) {
-        line = line.push(text(format!("= {decoded}")).size(12).color(ACCENT));
+        line = line.push(text(format!("= {decoded}")).size(12).color(style::accent()));
     }
     // Extension-provided annotation (e.g. "day 3, 09:30 in-game").
     if let Some(t) = r.extra_text() {
         line = line.push(
-            container(text(format!("◆ {t}")).size(12).color(ext_color.unwrap_or(ACCENT)))
+            container(text(format!("◆ {t}")).size(12).color(ext_color.unwrap_or(style::accent())))
                 .padding([1, 6])
                 .style(style::card()),
         );
     }
     if r.selected {
-        line = line.push(text(" ◂").size(12).color(ACCENT));
+        line = line.push(text(" ◂").size(12).color(style::accent()));
     }
     line.into()
 }
@@ -182,7 +182,7 @@ fn selection_panel<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> 
 
     match tab.selected_row() {
         None => {
-            panel = panel.push(text("Click a row to select it.").size(12).color(MUTED));
+            panel = panel.push(text("Click a row to select it.").size(12).color(style::muted()));
         }
         Some(r) => {
             // Heading: friendly label when known, raw path underneath.
@@ -191,13 +191,13 @@ fn selection_panel<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> 
             }
             panel = panel.push(
                 row![
-                    text(r.path.to_string()).size(11).color(MUTED),
+                    text(r.path.to_string()).size(11).color(style::muted()),
                 ]
                 .spacing(8),
             );
             if let Some(entry) = dictionary::lookup(&r.label) {
                 panel = panel.push(
-                    container(text(entry.desc).size(12).color(MUTED))
+                    container(text(entry.desc).size(12).color(style::muted()))
                         .style(style::card())
                         .padding(8)
                         .width(Length::Fill),
@@ -208,8 +208,8 @@ fn selection_panel<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> 
                 panel = panel.push(
                     container(
                         column![
-                            text("Extension").size(11).color(MUTED),
-                            text(desc).size(12).color(r.extra_color().unwrap_or(ACCENT)),
+                            text("Extension").size(11).color(style::muted()),
+                            text(desc).size(12).color(r.extra_color().unwrap_or(style::accent())),
                         ]
                         .spacing(2),
                     )
@@ -220,7 +220,7 @@ fn selection_panel<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> 
             }
             if let Some(decoded) = r.value_snbt.as_deref().and_then(|v| dictionary::decode(&r.label, v)) {
                 panel = panel.push(
-                    row![text("Meaning: ").size(12).color(MUTED), text(decoded).size(12).color(ACCENT)]
+                    row![text("Meaning: ").size(12).color(style::muted()), text(decoded).size(12).color(style::accent())]
                         .spacing(4),
                 );
             }
