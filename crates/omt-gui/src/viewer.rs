@@ -31,6 +31,7 @@ pub enum ViewerMsg {
     Strength(f32),
     Contour(i32),
     Ambient(f32),
+    Shadows(f32),
     ChunkGrid(Option<bool>),
     Layer(Layer, bool),
     Cave(bool),
@@ -431,6 +432,11 @@ impl ViewerState {
             }
             ViewerMsg::Contour(v) => {
                 self.prefs.style.contour = v;
+                self.restyle();
+                Task::none()
+            }
+            ViewerMsg::Shadows(v) => {
+                self.prefs.style.shadows = v;
                 self.restyle();
                 Task::none()
             }

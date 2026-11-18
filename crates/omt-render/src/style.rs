@@ -66,11 +66,13 @@ pub struct StyleParams {
     pub contour: i32,
     /// Night ambient brightness (0..1).
     pub night_ambient: f32,
+    /// Cast shadows (sunlight shadow casting): darkness 0 (off) .. 1.
+    pub shadows: f32,
 }
 
 impl Default for StyleParams {
     fn default() -> Self {
-        Self { style: MapStyle::Shaded, azimuth: 315.0, altitude: 45.0, strength: 0.75, exaggeration: 1.0, contour: 16, night_ambient: 0.32 }
+        Self { style: MapStyle::Shaded, azimuth: 315.0, altitude: 45.0, strength: 0.75, exaggeration: 1.0, contour: 16, night_ambient: 0.32, shadows: 0.0 }
     }
 }
 
@@ -313,12 +315,46 @@ pub fn stylize(t: &TileView<'_>, p: &StyleParams) -> Vec<u8> {
                     c
                 }
             };
+            let c = if p.shadows > 0.0 && p.style != MapStyle::Night && h0 != i16::MIN && in_shadow(t, x, z, h0, sun, p.exaggeration) {
+                let k = 1.0 - 0.6 * p.shadows.min(1.0);
+                [c[0] * k, c[1] * k, c[2] * k]
+            } else {
+                c
+            };
             for k in 0..3 {
                 out[o + k] = (c[k] * 255.0).round().clamp(0.0, 255.0) as u8;
             }
         }
     }
     out
+}
+
+/// Sunlight shadow casting: march from pixel (x, z) toward the sun over
+/// the tile's heightmap; shadowed when terrain rises above the ray.
+/// Bounded to 96 blocks / 48 px (tile-local: no shadows from neighbours).
+fn in_shadow(t: &TileView<'_>, x: usize, z: usize, h0: i16, sun: [f32; 3], exaggeration: f32) -> bool {
+    let horiz = (sun[0] * sun[0] + sun[2] * sun[2]).sqrt();
+    if horiz < 1e-3 {
+        return false;
+    }
+    let (dx, dz) = (sun[0] / horiz, sun[2] / horiz);
+    // Ray rise per pixel step, in blocks.
+    let rise = sun[1] / horiz * t.bpp / exaggeration.max(0.1);
+    let steps = ((96.0 / t.bpp) as usize).clamp(4, 48);
+    let (mut fx, mut fz, mut ray) = (x as f32 + 0.5, z as f32 + 0.5, h0 as f32 + 0.5);
+    for _ in 0..steps {
+        fx += dx;
+        fz += dz;
+        ray += rise;
+        if fx < 0.0 || fz < 0.0 || fx >= t.px as f32 || fz >= t.px as f32 || ray > 320.0 {
+            return false;
+        }
+        let h = t.heights[fz as usize * t.px + fx as usize];
+        if h != i16::MIN && h as f32 > ray {
+            return true;
+        }
+    }
+    false
 }
 
 /// Block-light map (0..15 per pixel) from emissive surface blocks.
@@ -426,5 +462,22 @@ mod tests {
         assert_eq!(out[3], 0);
         let row: Vec<u8> = (0..px).map(|x| out[(3 * px + x) * 4 + 1]).collect();
         assert!(row.windows(2).any(|w| w[0].abs_diff(w[1]) > 20), "contour lines vary the row: {row:?}");
+    }
+
+    #[test]
+    fn pillar_casts_a_shadow_away_from_the_sun() {
+        // 16×16 flat tile at Y 64 with a 40-block pillar in the middle.
+        let px = 16;
+        let mut heights = vec![64i16; px * px];
+        heights[8 * px + 8] = 104;
+        let rgba = vec![200u8; px * px * 4];
+        let t = TileView { px, bpp: 1.0, rgba: &rgba, heights: &heights, surface: &[], biomes: &[], names: &[] };
+        // Sun in the west (azimuth 270°), low: the shadow falls east.
+        let p = StyleParams { style: MapStyle::Shaded, azimuth: 270.0, altitude: 30.0, strength: 0.0, shadows: 1.0, ..Default::default() };
+        let out = stylize(&t, &p);
+        let lum = |x: usize, z: usize| out[(z * px + x) * 4] as u32;
+        assert!(lum(11, 8) < lum(5, 8), "east of the pillar is shadowed");
+        let off = stylize(&t, &StyleParams { shadows: 0.0, ..p });
+        assert_eq!(off[(8 * px + 11) * 4], off[(8 * px + 5) * 4]);
     }
 }

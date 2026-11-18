@@ -279,6 +279,7 @@ impl ViewerState {
             labeled("Sun direction", format!("{:.0}°", s.azimuth), slider(0.0..=359.0, s.azimuth, ViewerMsg::Azimuth).step(1.0f32).into()),
             labeled("Sun height", format!("{:.0}°", s.altitude), slider(5.0..=90.0, s.altitude, ViewerMsg::Altitude).step(1.0f32).into()),
             labeled("Relief", format!("{:.0}%", s.strength * 100.0), slider(0.0..=1.5, s.strength, ViewerMsg::Strength).step(0.05f32).into()),
+            labeled("Cast shadows", if s.shadows <= 0.0 { "off".into() } else { format!("{:.0}%", s.shadows * 100.0) }, slider(0.0..=1.0, s.shadows, ViewerMsg::Shadows).step(0.05f32).into()),
         ]
         .spacing(8);
         if s.style == MapStyle::Topographic {
