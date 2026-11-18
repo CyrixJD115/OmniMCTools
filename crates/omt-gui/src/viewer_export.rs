@@ -137,11 +137,16 @@ pub struct ExportState {
     pub trim: bool,
     pub busy: Option<(Arc<AtomicBool>, Arc<AtomicU64>, u64)>,
     pub status: String,
+    /// Web map: most detailed level (0 = 1:1).
+    pub web_detail: u8,
+    pub web_changed_only: bool,
+    pub web_grid: bool,
+    pub web_players: bool,
 }
 
 impl Default for ExportState {
     fn default() -> Self {
-        Self { area: Area::View, zoom: Zoom(0), min: ("-512".into(), "-512".into()), max: ("511".into(), "511".into()), background: String::new(), trim: true, busy: None, status: String::new() }
+        Self { area: Area::View, zoom: Zoom(0), min: ("-512".into(), "-512".into()), max: ("511".into(), "511".into()), background: String::new(), trim: true, busy: None, status: String::new(), web_detail: 0, web_changed_only: true, web_grid: false, web_players: true }
     }
 }
 

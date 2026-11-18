@@ -54,6 +54,7 @@ mod viewer_export;
 mod viewer_tex;
 mod viewer_types;
 mod viewer_view;
+mod viewer_web;
 mod world_edit;
 mod world_edit_3d;
 mod world_edit_view;

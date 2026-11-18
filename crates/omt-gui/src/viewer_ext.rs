@@ -39,6 +39,12 @@ pub enum ExportMsg {
     Picked(Option<PathBuf>),
     Cancel,
     Done(Result<String, String>),
+    WebDetail(u8),
+    WebChanged(bool),
+    WebGrid(bool),
+    WebPlayers(bool),
+    WebStart,
+    WebPicked(Option<PathBuf>),
 }
 
 #[derive(Debug, Clone)]
@@ -343,6 +349,28 @@ impl ViewerState {
                 let look = crate::viewer_export::Look { opts: self.ctl.options(), style: self.prefs.style, threads: crate::mapconfig::config().threads as usize };
                 return Task::perform(blocking(move || crate::viewer_export::export_area(&src, look, job, &path, &cancel, &done)), |r| ext(ExtMsg::Export(ExportMsg::Done(r))));
             }
+            ExportMsg::WebDetail(v) => st.web_detail = v,
+            ExportMsg::WebChanged(v) => st.web_changed_only = v,
+            ExportMsg::WebGrid(v) => st.web_grid = v,
+            ExportMsg::WebPlayers(v) => st.web_players = v,
+            ExportMsg::WebStart => {
+                if let Err(e) = crate::viewer_export::resolve(st, &self.ctl) {
+                    st.status = e;
+                    return Task::none();
+                }
+                return Task::perform(async { rfd::AsyncFileDialog::new().set_title("Web map output folder").pick_folder().await.map(|h| h.path().to_path_buf()) }, |p| ext(ExtMsg::Export(ExportMsg::WebPicked(p))));
+            }
+            ExportMsg::WebPicked(None) => {}
+            ExportMsg::WebPicked(Some(dir)) => {
+                let Some(job) = self.web_job() else { return Task::none() };
+                let Some(src) = self.ctl.map.as_ref().map(|m| m.source.clone()) else { return Task::none() };
+                let st = &mut self.ext.export;
+                let (cancel, done) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(0)));
+                st.busy = Some((Arc::clone(&cancel), Arc::clone(&done), crate::viewer_web::tile_count(&job)));
+                st.status = "exporting web map…".into();
+                let look = crate::viewer_export::Look { opts: self.ctl.options(), style: self.prefs.style, threads: crate::mapconfig::config().threads as usize };
+                return Task::perform(blocking(move || crate::viewer_web::export_web(&src, look, &job, &dir, &cancel, &done)), |r| ext(ExtMsg::Export(ExportMsg::Done(r))));
+            }
             ExportMsg::Cancel => {
                 if let Some((c, _, _)) = &st.busy {
                     c.store(true, Ordering::Relaxed);
@@ -551,5 +579,58 @@ impl ViewerState {
         let biome = at.and_then(|(x, z)| self.ctl.map.as_ref()?.biome_at(x, z).map(str::to_owned));
         let region = at.map(|(x, z)| if self.bedrock { format!("chunk {}, {} (LevelDB)", x.div_euclid(16), z.div_euclid(16)) } else { format!("r.{}.{}.mca", x.div_euclid(512), z.div_euclid(512)) });
         iced::widget::row![action("Copy block", copy(block)), action("Copy biome", copy(biome)), action(if self.bedrock { "Copy chunk" } else { "Copy region file" }, copy(region))].spacing(4).into()
+    }
+}
+
+impl ViewerState {
+    /// The web export job for the current form (area from the image form).
+    fn web_job(&mut self) -> Option<crate::viewer_web::WebJob> {
+        let st = &self.ext.export;
+        let job = match crate::viewer_export::resolve(st, &self.ctl) {
+            Ok(j) => j,
+            Err(e) => {
+                self.ext.export.status = e;
+                return None;
+            }
+        };
+        let chunks = (job.x0.div_euclid(16) as i32, job.z0.div_euclid(16) as i32, (job.x1 - 1).div_euclid(16) as i32, (job.z1 - 1).div_euclid(16) as i32);
+        let max_detail = st.web_detail.min(omt_render::MAX_LEVEL);
+        let min_detail = crate::viewer_web::auto_min_detail(chunks).max(max_detail);
+        let mut markers = Vec::new();
+        if self.ctl.dim == 0
+            && let Some(info) = &self.ext.info
+            && let Some(sp) = info.facts.iter().find(|(k, _)| k == "World spawn")
+        {
+            let v: Vec<f64> = sp.1.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+            if v.len() == 3 {
+                markers.push(("Spawn".to_string(), v[0], v[2], "spawn"));
+            }
+        }
+        if st.web_players {
+            markers.extend(self.ext.players.iter().filter(|p| p.dim == self.ctl.dim).map(|p| (p.label(), p.x, p.z, "player")));
+        }
+        let title = self.ext.info.as_ref().and_then(|i| i.facts.first().map(|f| f.1.clone())).unwrap_or_else(|| "Minecraft map".into());
+        Some(crate::viewer_web::WebJob { chunks, max_detail, min_detail, changed_only: st.web_changed_only, grid: st.web_grid, markers, title })
+    }
+
+    /// The web map export form (Export tab).
+    pub fn export_web_ui(&self) -> Element<'_, ViewerMsg> {
+        use crate::panelui::{action, heading, note, switch};
+        use iced::widget::{column, pick_list, row, text};
+        let st = &self.ext.export;
+        let on = |m: ExportMsg| ext(ExtMsg::Export(m));
+        let details: Vec<Zoom> = (0..=4).map(|l| Zoom(-(l as i8))).collect();
+        let cur = Zoom(-(st.web_detail as i8));
+        column![
+            heading("WEB MAP EXPORT"),
+            row![text("Max detail").size(12).width(80), pick_list(details, Some(cur), move |z: Zoom| on(ExportMsg::WebDetail((-z.0) as u8))).text_size(12).width(iced::Length::Fill)].align_y(iced::Alignment::Center),
+            switch("Update changed regions only", st.web_changed_only, move |v| on(ExportMsg::WebChanged(v))),
+            switch("Include players", st.web_players, move |v| on(ExportMsg::WebPlayers(v))),
+            switch("Grid on by default", st.web_grid, move |v| on(ExportMsg::WebGrid(v))),
+            action("Export web map…", st.busy.is_none().then(|| on(ExportMsg::WebStart))),
+            note("Writes index.html + a tile pyramid for the image export's area; open it in any browser or host it on a web server."),
+        ]
+        .spacing(8)
+        .into()
     }
 }

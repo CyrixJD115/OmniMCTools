@@ -416,6 +416,7 @@ impl ViewerState {
             ]
             .spacing(4),
             self.export_area_ui(),
+            self.export_web_ui(),
         ]
         .spacing(8)
         .into()
