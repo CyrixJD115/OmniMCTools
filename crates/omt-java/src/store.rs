@@ -219,6 +219,9 @@ impl JavaWorld {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "mca") {
                 out.push(path);
+            } else if path.extension().is_some_and(|e| e == "mcr") && !path.with_extension("mca").is_file() {
+                // Beta McRegion; ignored once the world was converted to Anvil.
+                out.push(path);
             }
         }
         out.sort();
@@ -241,10 +244,7 @@ impl JavaWorld {
         // Locate the region containing (x, z).
         let rx = x.div_euclid(32);
         let rz = z.div_euclid(32);
-        let path = self
-            .dimension_dir(dim)
-            .unwrap_or_else(|| dimension_dir(&self.root, dim))
-            .join(format!("r.{rx}.{rz}.mca"));
+        let path = self.region_path(dim, rx, rz);
         if !path.is_file() {
             return Ok(None);
         }
@@ -270,10 +270,7 @@ impl JavaWorld {
         coords: &[(i32, i32)],
     ) -> WorldResult<RegionChunkReads> {
         use rayon::prelude::*;
-        let path = self
-            .dimension_dir(dim)
-            .unwrap_or_else(|| dimension_dir(&self.root, dim))
-            .join(format!("r.{rx}.{rz}.mca"));
+        let path = self.region_path(dim, rx, rz);
         if !path.is_file() {
             return Ok(coords.iter().map(|&c| (c, Ok(None))).collect());
         }
@@ -294,11 +291,13 @@ impl JavaWorld {
             .collect())
     }
 
-    /// Path of region `(rx, rz)` of a dimension (may not exist).
+    /// Path of region `(rx, rz)` of a dimension (may not exist): the
+    /// Anvil `.mca`, or a Beta McRegion `.mcr` when only that exists.
     pub fn region_path(&self, dim: u8, rx: i32, rz: i32) -> PathBuf {
-        self.dimension_dir(dim)
-            .unwrap_or_else(|| dimension_dir(&self.root, dim))
-            .join(format!("r.{rx}.{rz}.mca"))
+        let dir = self.dimension_dir(dim).unwrap_or_else(|| dimension_dir(&self.root, dim));
+        let mca = dir.join(format!("r.{rx}.{rz}.mca"));
+        let mcr = dir.join(format!("r.{rx}.{rz}.mcr"));
+        if !mca.is_file() && mcr.is_file() { mcr } else { mca }
     }
 
     /// Fingerprint of a region file for render caches: size + a hash of the
@@ -367,6 +366,13 @@ pub fn nbt_to_chunk(dim: u8, x: i32, z: i32, nbt: &Nbt) -> WorldResult<Chunk> {
         inhabited_time: nbt.tag.get("InhabitedTime").and_then(|t| t.as_i64()).unwrap_or(0),
         ..Default::default()
     };
+    // Pre-1.18 chunks (Beta McRegion through 1.17) nest under `Level`.
+    if let Some(level) = nbt.tag.get("Level")
+        && nbt.tag.get("sections").is_none()
+    {
+        crate::legacy_chunk::decode_level(&mut chunk, level);
+        return Ok(chunk);
+    }
     if let Some(sections) = nbt.tag.get("sections").and_then(|t| t.as_list()) {
         for section in sections {
             let Some(y) = section.get("Y").and_then(|t| t.as_i64()) else { continue };

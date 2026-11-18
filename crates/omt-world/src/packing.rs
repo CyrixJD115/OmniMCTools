@@ -80,6 +80,38 @@ pub fn unpack_java_packed(packed: &[i64], values: usize, bits: u32) -> Vec<u16> 
     out
 }
 
+/// Unpack `values` entries of `bits` width from the pre-1.16 **spanning**
+/// layout (Java 1.13–1.15, DataVersion < 2527): one continuous LSB-first
+/// bit stream, so an entry may straddle two longs.
+pub fn unpack_java_spanning(packed: &[i64], values: usize, bits: u32) -> Vec<u16> {
+    if bits == 0 || values == 0 {
+        return vec![0u16; values];
+    }
+    let bits = bits as usize;
+    let mask = (1u64 << bits) - 1;
+    let word = |i: usize| packed.get(i).copied().unwrap_or(0) as u64;
+    (0..values)
+        .map(|i| {
+            let bit = i * bits;
+            let (w, off) = (bit / 64, bit % 64);
+            let mut v = word(w) >> off;
+            if off + bits > 64 {
+                v |= word(w + 1) << (64 - off);
+            }
+            (v & mask) as u16
+        })
+        .collect()
+}
+
+/// Bits per block entry of a 1.13–1.17 section, derived from the long
+/// array's length (robust to palettes with unused entries): spanning
+/// arrays hold `4096 * bits / 64` longs, non-spanning `ceil(4096 / (64/bits))`.
+pub fn java_legacy_block_bits(longs: usize, spanning: bool) -> u32 {
+    (4..=16u32)
+        .find(|&b| if spanning { 4096 * b as usize / 64 == longs } else { 4096usize.div_ceil(64 / b as usize) == longs })
+        .unwrap_or(4)
+}
+
 /// Unpack a Java block-state `data` long array (4096 entries).
 pub fn unpack_java_indices(packed: &[i64], palette_len: usize) -> Vec<u16> {
     unpack_java_packed(packed, 4096, java_block_bits(palette_len))
@@ -146,6 +178,24 @@ pub fn pack_java_heightmap(values: &[u16]) -> Vec<i64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spanning_unpack_crosses_longs() {
+        // 5-bit entries: entry 12 occupies bits 60..65 (straddles long 0/1).
+        let values: Vec<u16> = (0..4096).map(|i| (i % 31) as u16).collect();
+        let mut packed = vec![0i64; 4096 * 5 / 64];
+        for (i, &v) in values.iter().enumerate() {
+            let bit = i * 5;
+            let (w, off) = (bit / 64, bit % 64);
+            packed[w] |= ((v as u64) << off) as i64;
+            if off + 5 > 64 {
+                packed[w + 1] |= ((v as u64) >> (64 - off)) as i64;
+            }
+        }
+        assert_eq!(super::unpack_java_spanning(&packed, 4096, 5), values);
+        assert_eq!(super::java_legacy_block_bits(packed.len(), true), 5);
+        assert_eq!(super::java_legacy_block_bits(342, false), 5);
+    }
+
     use super::*;
 
     #[test]

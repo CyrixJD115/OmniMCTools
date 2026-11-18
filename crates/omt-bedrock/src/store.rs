@@ -249,7 +249,7 @@ impl BedrockWorld {
     pub fn column_records(&self, dim: u8, x: i32, z: i32) -> WorldResult<ColumnRecords> {
         // One batched exact-key read (never a snapshot: `Db::snapshot()`
         // materializes the whole database).
-        let mut wanted: Vec<Vec<u8>> = [tag::VERSION, tag::DATA_3D, tag::FINALIZED_STATE, tag::BLOCK_ENTITIES]
+        let mut wanted: Vec<Vec<u8>> = [tag::VERSION, tag::DATA_3D, tag::FINALIZED_STATE, tag::BLOCK_ENTITIES, tag::DATA_2D_LEGACY, tag::DATA_2D_OLD, tag::LEGACY_TERRAIN]
             .iter()
             .map(|&t| keys::chunk_record(x, z, dim, t))
             .collect();
@@ -341,7 +341,28 @@ impl BedrockWorld {
             }
         }
 
-        if version == 0 && !has_data3d && !any_subchunk && !has_finalized {
+        // Pre-1.18 biomes (Data2D / Data2DLegacy) when there is no data3D.
+        if !has_data3d {
+            let d2 = rec(&keys::chunk_record(x, z, dim, tag::DATA_2D_LEGACY)).and_then(|r| crate::legacy::data2d(r, false));
+            let d2 = d2.or_else(|| rec(&keys::chunk_record(x, z, dim, tag::DATA_2D_OLD)).and_then(|r| crate::legacy::data2d(r, true)));
+            if let Some((heights, biomes)) = d2 {
+                chunk.heightmaps = vec![("bedrock_2d".into(), heights.iter().map(|&h| h as u64).collect())];
+                chunk.bedrock_biomes = Some(biomes);
+            }
+        }
+        // Pre-1.0 PE: the whole column in one LegacyTerrain record.
+        let mut legacy_terrain = false;
+        if !any_subchunk
+            && let Some((slices, biomes)) = rec(&keys::chunk_record(x, z, dim, tag::LEGACY_TERRAIN)).and_then(|r| crate::legacy::legacy_terrain(r))
+        {
+            legacy_terrain = true;
+            chunk.slices = slices;
+            if chunk.bedrock_biomes.is_none() {
+                chunk.bedrock_biomes = biomes;
+            }
+        }
+
+        if version == 0 && !has_data3d && !any_subchunk && !has_finalized && !legacy_terrain {
             return Ok(None);
         }
 

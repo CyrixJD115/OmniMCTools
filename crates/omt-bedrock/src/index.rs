@@ -27,6 +27,9 @@ pub mod flag {
     pub const DATA_2D_LEGACY: u8 = 16;
     pub const DIGP: u8 = 32;
     pub const OTHER: u8 = 64;
+    /// Pre-1.0 `LegacyTerrain` column (also marks a pre-1.18 `Data2D`
+    /// record's sibling `Data2DLegacy`; both are fetched when set).
+    pub const LEGACY: u8 = 128;
 }
 
 /// Presence summary of one chunk column.
@@ -41,7 +44,7 @@ impl ColumnInfo {
     /// The column counts as a chunk (same rule as `list_chunks`): any
     /// subchunk, or a version / data3D / finalized-state record.
     pub fn is_chunk(&self) -> bool {
-        self.subchunks != 0 || self.flags & (flag::VERSION | flag::DATA_3D | flag::FINALIZED) != 0
+        self.subchunks != 0 || self.flags & (flag::VERSION | flag::DATA_3D | flag::FINALIZED | flag::LEGACY) != 0
     }
 
     pub fn has_subchunk(&self, y: i8) -> bool {
@@ -70,6 +73,14 @@ impl ColumnInfo {
         }
         if self.flags & flag::FINALIZED != 0 {
             out.push(keys::chunk_record(x, z, dim, tag::FINALIZED_STATE));
+        }
+        // Pre-1.18 biomes (no data3D) and pre-1.0 terrain.
+        if self.flags & flag::DATA_3D == 0 && self.flags & flag::DATA_2D_LEGACY != 0 {
+            out.push(keys::chunk_record(x, z, dim, tag::DATA_2D_LEGACY));
+        }
+        if self.flags & flag::LEGACY != 0 {
+            out.push(keys::chunk_record(x, z, dim, tag::DATA_2D_OLD));
+            out.push(keys::chunk_record(x, z, dim, tag::LEGACY_TERRAIN));
         }
         let mut bits = self.subchunks;
         while bits != 0 {
@@ -189,6 +200,7 @@ impl ColumnIndex {
                     tag::FINALIZED_STATE => flag::FINALIZED,
                     tag::BLOCK_ENTITIES => flag::BLOCK_ENTITIES,
                     tag::DATA_2D_LEGACY => flag::DATA_2D_LEGACY,
+                    tag::DATA_2D_OLD | tag::LEGACY_TERRAIN => flag::LEGACY,
                     _ => flag::OTHER,
                 };
                 (dim, x, z, ColumnInfo { subchunks: 0, flags: f })

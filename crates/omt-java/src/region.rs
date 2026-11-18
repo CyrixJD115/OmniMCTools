@@ -115,7 +115,8 @@ impl RegionFile {
     /// Region coordinates from a file name `r.<x>.<z>.mca`.
     pub fn coords_from_name(path: &Path) -> Option<(i32, i32)> {
         let name = path.file_name()?.to_str()?;
-        let rest = name.strip_prefix("r.")?.strip_suffix(".mca")?;
+        let rest = name.strip_prefix("r.")?;
+        let rest = rest.strip_suffix(".mca").or_else(|| rest.strip_suffix(".mcr"))?;
         let mut it = rest.split('.');
         let x: i32 = it.next()?.parse().ok()?;
         let z: i32 = it.next()?.parse().ok()?;

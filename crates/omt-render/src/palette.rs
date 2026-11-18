@@ -181,4 +181,26 @@ mod tests {
         assert_eq!(p.biome("minecraft:plains").grass, 0x91bd59, "vanilla plains grass");
         assert_eq!(p.block(&st("mod:thing")), BlockColor::UNKNOWN);
     }
+
+    #[test]
+    fn every_legacy_id_has_a_color() {
+        let p = Palette::embedded();
+        let mut missing = Vec::new();
+        for id in 0..256u16 {
+            for data in 0..16u8 {
+                for name in [omt_world::legacy::java_block(id, data), omt_world::legacy::bedrock_block(id, data)] {
+                    if !p.blocks.contains_key(name) && !missing.contains(&name) {
+                        missing.push(name);
+                    }
+                }
+            }
+        }
+        for id in 0..256u32 {
+            let b = omt_world::legacy::biome(id);
+            if !p.biomes.contains_key(b) && !missing.contains(&b) {
+                missing.push(b);
+            }
+        }
+        assert!(missing.is_empty(), "legacy names without colors: {missing:?}");
+    }
 }
