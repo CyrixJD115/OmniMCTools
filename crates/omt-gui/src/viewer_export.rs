@@ -235,11 +235,18 @@ pub struct Look {
 pub fn export_area(src: &MapSource, look: Look, job: AreaJob, path: &std::path::Path, cancel: &AtomicBool, done: &AtomicU64) -> Result<String, String> {
     let Look { opts, style, threads } = look;
     let (w, h) = job.px_size();
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    let mut wr = enc.write_header().map_err(|e| e.to_string())?.into_stream_writer().map_err(|e| e.to_string())?;
+    let format = Format::of(path);
+    let mut sink = match format {
+        Format::Png => {
+            let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+            let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            Sink::Png(Box::new(enc.write_header().map_err(|e| e.to_string())?.into_stream_writer().map_err(|e| e.to_string())?))
+        }
+        Format::Other(_) if w * h > MAX_BUFFERED_PX => return Err(format!("{w}×{h} px is too large for this format (max {} MP) — use PNG, which streams", MAX_BUFFERED_PX / 1_000_000)),
+        Format::Other(_) => Sink::Buffer(Vec::with_capacity((w * h * 4) as usize)),
+    };
     let span_blocks = (TILE_CHUNKS as i64 * 16) << job.level;
     let bpp = 1i64 << job.level;
     let (tx0, tx1) = (job.x0.div_euclid(span_blocks), (job.x1 - 1).div_euclid(span_blocks));
@@ -289,7 +296,7 @@ pub fn export_area(src: &MapSource, look: Look, job: AreaJob, path: &std::path::
                 };
             }
             if job.scale == 1 {
-                std::io::Write::write_all(&mut wr, &line).map_err(|e| e.to_string())?;
+                sink.write(&line)?;
             } else {
                 for (i, px) in line.as_chunks::<4>().0.iter().enumerate() {
                     for k in 0..job.scale as usize {
@@ -298,14 +305,71 @@ pub fn export_area(src: &MapSource, look: Look, job: AreaJob, path: &std::path::
                     }
                 }
                 for _ in 0..job.scale {
-                    std::io::Write::write_all(&mut wr, &scaled).map_err(|e| e.to_string())?;
+                    sink.write(&scaled)?;
                 }
             }
         }
     }
-    wr.finish().map_err(|e| e.to_string())?;
+    match (sink, format) {
+        (Sink::Png(wr), _) => wr.finish().map_err(|e| e.to_string())?,
+        (Sink::Buffer(buf), Format::Other(f)) => {
+            let img = image::RgbaImage::from_raw(w as u32, h as u32, buf).ok_or("image buffer size mismatch")?;
+            // JPEG has no alpha: flatten onto the background (or the map's dark).
+            if f == image::ImageFormat::Jpeg {
+                let bg = job.background.unwrap_or([17, 19, 23]);
+                let rgb = image::RgbImage::from_fn(w as u32, h as u32, |x, y| {
+                    let p = img.get_pixel(x, y).0;
+                    let a = p[3] as u32;
+                    image::Rgb([0, 1, 2].map(|k| ((p[k] as u32 * a + bg[k] as u32 * (255 - a)) / 255) as u8))
+                });
+                rgb.save_with_format(path, f).map_err(|e| e.to_string())?;
+            } else {
+                img.save_with_format(path, f).map_err(|e| e.to_string())?;
+            }
+        }
+        (Sink::Buffer(_), Format::Png) => unreachable!("PNG always streams"),
+    }
     Ok(format!("exported {w}×{h} px to {}", path.display()))
 }
+
+/// Non-PNG formats are encoded from memory: cap their size.
+pub const MAX_BUFFERED_PX: u64 = 200_000_000;
+
+/// Output format chosen by the file extension (PNG streams).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Format {
+    Png,
+    Other(image::ImageFormat),
+}
+
+impl Format {
+    fn of(path: &std::path::Path) -> Self {
+        match image::ImageFormat::from_path(path) {
+            Ok(image::ImageFormat::Png) | Err(_) => Self::Png,
+            Ok(f) => Self::Other(f),
+        }
+    }
+}
+
+enum Sink {
+    Png(Box<png::StreamWriter<'static, std::io::BufWriter<std::fs::File>>>),
+    Buffer(Vec<u8>),
+}
+
+impl Sink {
+    fn write(&mut self, row: &[u8]) -> Result<(), String> {
+        match self {
+            Self::Png(w) => std::io::Write::write_all(w, row).map_err(|e| e.to_string()),
+            Self::Buffer(b) => {
+                b.extend_from_slice(row);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Save-dialog filters for the image export.
+pub const FORMATS: [(&str, &[&str]); 6] = [("PNG image", &["png"]), ("JPEG image", &["jpg", "jpeg"]), ("WebP image", &["webp"]), ("TIFF image", &["tif", "tiff"]), ("BMP image", &["bmp"]), ("QOI image", &["qoi"])];
 
 #[cfg(test)]
 mod tests {
@@ -339,5 +403,14 @@ mod tests {
         let (w, h) = job.px_size();
         assert_eq!((r.info().width as u64, r.info().height as u64), (w, h), "{msg}");
         let _ = std::fs::remove_file(out);
+        // Buffered formats (JPEG flattens alpha, WebP keeps it).
+        let small = AreaJob { level: 3, ..job };
+        for ext in ["jpg", "webp"] {
+            let p = std::env::temp_dir().join(format!("omt-export-{}.{ext}", std::process::id()));
+            export_area(&src, look, small, &p, &AtomicBool::new(false), &AtomicU64::new(0)).unwrap();
+            let img = image::open(&p).unwrap();
+            assert_eq!((img.width() as u64, img.height() as u64), small.px_size(), "{ext}");
+            let _ = std::fs::remove_file(p);
+        }
     }
 }

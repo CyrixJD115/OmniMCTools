@@ -326,7 +326,13 @@ impl ViewerState {
                     return Task::none();
                 }
                 return Task::perform(
-                    async { rfd::AsyncFileDialog::new().set_title("Export map image").add_filter("PNG image", &["png"]).set_file_name("map.png").save_file().await.map(|h| h.path().to_path_buf()) },
+                    async {
+                        let mut d = rfd::AsyncFileDialog::new().set_title("Export map image").set_file_name("map.png");
+                        for (name, exts) in crate::viewer_export::FORMATS {
+                            d = d.add_filter(name, exts);
+                        }
+                        d.save_file().await.map(|h| h.path().to_path_buf())
+                    },
                     |p| ext(ExtMsg::Export(ExportMsg::Picked(p))),
                 );
             }

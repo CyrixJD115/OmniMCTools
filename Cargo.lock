@@ -3154,6 +3154,7 @@ dependencies = [
  "dirs",
  "iced",
  "iced_winit",
+ "image",
  "omt-art",
  "omt-bedrock",
  "omt-convert",
