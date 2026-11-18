@@ -263,7 +263,7 @@ impl BedrockWorld {
     pub fn column_records(&self, dim: u8, x: i32, z: i32) -> WorldResult<ColumnRecords> {
         // One batched exact-key read (never a snapshot: `Db::snapshot()`
         // materializes the whole database).
-        let mut wanted: Vec<Vec<u8>> = [tag::VERSION, tag::DATA_3D, tag::FINALIZED_STATE, tag::BLOCK_ENTITIES, tag::DATA_2D_LEGACY, tag::DATA_2D_OLD, tag::LEGACY_TERRAIN]
+        let mut wanted: Vec<Vec<u8>> = [tag::VERSION, tag::DATA_3D, tag::FINALIZED_STATE, tag::BLOCK_ENTITIES, tag::LEGACY_ENTITIES, tag::DATA_2D_LEGACY, tag::DATA_2D_OLD, tag::LEGACY_TERRAIN]
             .iter()
             .map(|&t| keys::chunk_record(x, z, dim, t))
             .collect();
@@ -400,6 +400,11 @@ impl BedrockWorld {
                 chunk.block_entities.push(nbt.tag);
                 pos += consumed;
             }
+        }
+
+        // Pre-1.18.30 in-chunk entities (0x32): concatenated LE NBT roots.
+        if let Some(raw) = rec(&keys::chunk_record(x, z, dim, tag::LEGACY_ENTITIES)) {
+            chunk.entities.extend(parse_nbt_sequence(raw));
         }
 
         // Actors (digp → actorprefix NBT), gathered by `column_records`.
@@ -651,6 +656,23 @@ impl WorldStore for BedrockWorld {
             .flush()
             .map_err(|e| WorldError::Store(format!("leveldb flush: {e}")))
     }
+}
+
+/// A run of concatenated little-endian NBT roots (stops at the first
+/// unreadable one).
+pub fn parse_nbt_sequence(raw: &[u8]) -> Vec<omt_nbt::Tag> {
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while pos < raw.len() {
+        match omt_nbt::read_prefix(&raw[pos..], ByteOrder::Little) {
+            Ok((nbt, n)) if n > 0 => {
+                out.push(nbt.tag);
+                pos += n;
+            }
+            _ => break,
+        }
+    }
+    out
 }
 
 /// Parse an actor/player NBT payload (little-endian, empty root name).

@@ -31,6 +31,8 @@ pub mod tag {
     pub const SUBCHUNK_PREFIX: u8 = 0x2f;
     /// Block entities per chunk, little-endian NBT.
     pub const BLOCK_ENTITIES: u8 = 0x31;
+    /// Pre-1.18.30 entities stored in the chunk (concatenated LE NBT).
+    pub const LEGACY_ENTITIES: u8 = 0x32;
     /// Block ticks ("currentTick"/"tickList" NBT).
     pub const BLOCK_TICKS: u8 = 0x33;
     pub const EDGES: u8 = 0x35;
