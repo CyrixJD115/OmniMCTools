@@ -5,7 +5,7 @@
 
 use iced::widget::{column, pick_list, row, slider, text, text_input};
 use iced::{Alignment, Element, Length};
-use omt_render::rules::{Preset, Rules, Tints, UnknownAs};
+use omt_render::rules::{Category, Preset, Rules, Tints, UnknownAs};
 use serde::{Deserialize, Serialize};
 
 use crate::panelui::{self, heading, note, switch};
@@ -24,11 +24,13 @@ pub struct MapRules {
     pub colors: Vec<(String, [u8; 3])>,
     pub unknown: UnknownAs,
     pub water_visibility: u8,
+    /// Colour categories switched off (rendered plain).
+    pub plain: Vec<Category>,
 }
 
 impl Default for MapRules {
     fn default() -> Self {
-        Self { filter_on: true, presets: Vec::new(), custom: String::new(), tints: Tints::default(), colors: Vec::new(), unknown: UnknownAs::default(), water_visibility: omt_render::rules::WATER_VISIBILITY }
+        Self { filter_on: true, presets: Vec::new(), custom: String::new(), tints: Tints::default(), colors: Vec::new(), unknown: UnknownAs::default(), water_visibility: omt_render::rules::WATER_VISIBILITY, plain: Vec::new() }
     }
 }
 
@@ -43,7 +45,9 @@ impl MapRules {
         }
         hide.sort();
         hide.dedup();
-        Rules { hide, colors: self.colors.clone(), tints: self.tints, unknown: self.unknown, water_visibility: self.water_visibility }
+        let mut plain = self.plain.clone();
+        plain.sort_by_key(|c| *c as u8);
+        Rules { hide, colors: self.colors.clone(), tints: self.tints, unknown: self.unknown, water_visibility: self.water_visibility, plain }
     }
 }
 
@@ -62,6 +66,12 @@ pub enum RulesMsg {
     RemoveColor(usize),
     Unknown(UnknownAs),
     Water(u8),
+    /// Colour category on (coloured) / off (plain).
+    Category(Category, bool),
+    /// Read block colours from the clipboard (handled by the viewer).
+    PasteColors,
+    /// Clipboard text: `block = #rrggbb` lines (uNmINeD custom.blockstyles.txt).
+    Pasted(Option<String>),
     Reset,
 }
 
@@ -114,6 +124,23 @@ pub fn apply(r: &mut MapRules, d: &mut RulesDraft, m: RulesMsg) -> bool {
         }
         RulesMsg::Unknown(u) => r.unknown = u,
         RulesMsg::Water(w) => r.water_visibility = w,
+        RulesMsg::PasteColors => {}
+        RulesMsg::Pasted(text) => {
+            let parsed = parse_block_styles(text.as_deref().unwrap_or(""));
+            if parsed.is_empty() {
+                d.error = "clipboard has no `block = #rrggbb` lines".into();
+            }
+            for (name, c) in parsed {
+                r.colors.retain(|(n, _)| *n != name);
+                r.colors.push((name, c));
+            }
+        }
+        RulesMsg::Category(c, colored) => {
+            r.plain.retain(|x| *x != c);
+            if !colored {
+                r.plain.push(c);
+            }
+        }
         RulesMsg::Reset => {
             let keep = r.filter_on;
             *r = MapRules { filter_on: keep, ..MapRules::default() };
@@ -166,6 +193,11 @@ pub fn stylesheet_tab<'a, M: Clone + 'a>(r: &'a MapRules, d: &'a RulesDraft, on:
         tint(0, "Grass", t.grass),
         tint(1, "Foliage", t.foliage),
         tint(2, "Water", t.water),
+        heading("COLORS"),
+        Category::ALL.iter().fold(column![].spacing(8), |col, &c| {
+            let on = on.clone();
+            col.push(switch(c.name(), !r.plain.contains(&c), move |v| on(RulesMsg::Category(c, v))))
+        }),
         heading("WATER"),
         row![
             text("Underwater visibility").size(12).width(Length::Fill),
@@ -207,8 +239,21 @@ pub fn stylesheet_tab<'a, M: Clone + 'a>(r: &'a MapRules, d: &'a RulesDraft, on:
     if !d.error.is_empty() {
         col = col.push(text(d.error.clone()).size(11).color(style::warn()));
     }
-    col = col.push(panelui::action("Reset stylesheet", Some(on(RulesMsg::Reset))));
+    col = col.push(row![panelui::action("Paste block colors", Some(on(RulesMsg::PasteColors))), panelui::action("Reset stylesheet", Some(on(RulesMsg::Reset)))].spacing(4));
+    col = col.push(note("Paste accepts `block = #rrggbb` lines (uNmINeD custom.blockstyles.txt; the Blocks tab copies this format)."));
     col.into()
+}
+
+/// Parse `block = color` lines (`//` comments; `#rrggbb` / `rgb()`).
+pub fn parse_block_styles(text: &str) -> Vec<(String, [u8; 3])> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("//"))
+        .filter_map(|l| {
+            let (name, color) = l.split_once('=')?;
+            Some((name.trim().to_string(), panelui::parse_color(color.trim().trim_end_matches(';'))?))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -229,5 +274,7 @@ mod tests {
         assert!(apply(&mut r, &mut d, RulesMsg::AddColor));
         assert_eq!(r.colors, vec![("stone".to_string(), [16, 32, 48])]);
         assert!(!apply(&mut r, &mut d, RulesMsg::Custom("dirt".into())), "typing alone does not re-render");
+        assert!(apply(&mut r, &mut d, RulesMsg::Pasted(Some("// c\nminecraft:grass_block = #00ff00\n*_wool = rgb(1,2,3)\nbad line".into()))));
+        assert_eq!(r.colors.len(), 3);
     }
 }

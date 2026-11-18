@@ -66,6 +66,76 @@ impl std::fmt::Display for UnknownAs {
     }
 }
 
+/// Stylesheet colour categories (uNmINeD "Colors"): switched off, their
+/// blocks render as a plain base block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Category {
+    Ores,
+    Flowers,
+    Coral,
+    Dyed,
+    Copper,
+    Mycelium,
+    Stones,
+}
+
+impl Category {
+    pub const ALL: [Category; 7] = [Self::Ores, Self::Flowers, Self::Coral, Self::Dyed, Self::Copper, Self::Mycelium, Self::Stones];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Ores => "Ores",
+            Self::Flowers => "Flowers",
+            Self::Coral => "Coral",
+            Self::Dyed => "Dyed blocks",
+            Self::Copper => "Copper (weathering)",
+            Self::Mycelium => "Mycelium",
+            Self::Stones => "Natural stones",
+        }
+    }
+
+    /// The plain block this category's block renders as (`None` = not in it).
+    pub fn plain(self, name: &str) -> Option<String> {
+        let id = name.strip_prefix("minecraft:").unwrap_or(name);
+        let ns = |s: &str| Some(format!("minecraft:{s}"));
+        match self {
+            Self::Ores if id.ends_with("_ore") || id == "ancient_debris" => {
+                if id.starts_with("deepslate_") {
+                    ns("deepslate")
+                } else if id.starts_with("nether_") || id == "ancient_debris" {
+                    ns("netherrack")
+                } else {
+                    ns("stone")
+                }
+            }
+            Self::Flowers if ["dandelion", "poppy", "blue_orchid", "allium", "azure_bluet", "oxeye_daisy", "cornflower", "lily_of_the_valley", "sunflower", "lilac", "rose_bush", "peony", "torchflower", "pink_petals", "wither_rose", "wildflowers"].contains(&id) || id.ends_with("_tulip") => ns("short_grass"),
+            Self::Coral if id.contains("coral") && !id.starts_with("dead_") => ns(&format!("dead_{id}")),
+            Self::Dyed => {
+                const COLORS: [&str; 16] = ["white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black"];
+                let rest = COLORS.iter().filter_map(|c| id.strip_prefix(c)?.strip_prefix('_')).max_by_key(|r| usize::MAX - r.len())?;
+                match rest {
+                    "terracotta" => ns("terracotta"),
+                    "wool" | "carpet" | "concrete" | "concrete_powder" | "stained_glass" | "stained_glass_pane" | "glazed_terracotta" | "shulker_box" | "bed" | "candle" | "banner" => ns(&format!("white_{rest}")),
+                    _ => None,
+                }
+            }
+            Self::Copper if id.contains("copper") && (id.starts_with("exposed_") || id.starts_with("weathered_") || id.starts_with("oxidized_") || id.starts_with("waxed_")) => {
+                let base = id.trim_start_matches("waxed_").trim_start_matches("exposed_").trim_start_matches("weathered_").trim_start_matches("oxidized_");
+                ns(if base == "copper" { "copper_block" } else { base })
+            }
+            Self::Mycelium if id == "mycelium" => ns("dirt"),
+            Self::Stones if ["granite", "diorite", "andesite", "tuff", "calcite"].contains(&id) => ns("stone"),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Category {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 /// Default underwater visibility (blocks of water blended into a column).
 pub const WATER_VISIBILITY: u8 = 24;
 
@@ -78,11 +148,13 @@ pub struct Rules {
     pub unknown: UnknownAs,
     /// Blocks of water seen through (0 = flat opaque water surface).
     pub water_visibility: u8,
+    /// Colour categories switched off (rendered plain).
+    pub plain: Vec<Category>,
 }
 
 impl Default for Rules {
     fn default() -> Self {
-        Self { hide: Vec::new(), colors: Vec::new(), tints: Tints::default(), unknown: UnknownAs::default(), water_visibility: WATER_VISIBILITY }
+        Self { hide: Vec::new(), colors: Vec::new(), tints: Tints::default(), unknown: UnknownAs::default(), water_visibility: WATER_VISIBILITY, plain: Vec::new() }
     }
 }
 
@@ -193,6 +265,9 @@ impl Rules {
         if let Some((_, c)) = self.colors.iter().find(|(p, _)| matches(p, &state.name)) {
             return BlockColor { rgba: [c[0], c[1], c[2], 255], tint: Tint::None };
         }
+        if let Some(plain) = self.plain.iter().find_map(|c| c.plain(&state.name)) {
+            return palette.block(&omt_world::BlockState { name: plain, properties: Vec::new() });
+        }
         let c = palette.block(state);
         if c == BlockColor::UNKNOWN {
             return match self.unknown {
@@ -281,6 +356,11 @@ mod tests {
         let id = register(r.clone());
         assert_ne!(id, 0);
         assert_eq!(*get(id), r);
+        let plain = Rules { plain: vec![Category::Ores, Category::Dyed], ..Default::default() };
+        assert_eq!(plain.block(p, &st("minecraft:deepslate_diamond_ore")), p.block(&st("minecraft:deepslate")));
+        assert_eq!(plain.block(p, &st("minecraft:light_blue_wool")), p.block(&st("minecraft:white_wool")));
+        assert_eq!(Category::Copper.plain("minecraft:waxed_oxidized_cut_copper").as_deref(), Some("minecraft:cut_copper"));
+        assert_eq!(Category::Coral.plain("minecraft:tube_coral_block").as_deref(), Some("minecraft:dead_tube_coral_block"));
         let gray = Rules { unknown: UnknownAs::Transparent, ..Default::default() };
         assert!(gray.block(p, &st("mod:thing")).is_clear());
     }

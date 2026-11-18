@@ -175,6 +175,7 @@ impl ViewerState {
                 Task::none()
             }
             ExtMsg::List(l) => self.update_lists(sess, l),
+            ExtMsg::Rules(RulesMsg::PasteColors) => iced::clipboard::read().map(|t| ext(ExtMsg::Rules(RulesMsg::Pasted(t)))),
             ExtMsg::Rules(r) => {
                 if crate::viewer_rules::apply(&mut self.prefs.rules, &mut self.ext.rules_draft, r) {
                     return self.apply_rules(store);
