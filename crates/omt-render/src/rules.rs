@@ -158,54 +158,125 @@ impl Default for Rules {
     }
 }
 
-/// Predefined block filters (uNmINeD's "Default filters" list; OMT's own
-/// grouping).
+/// Predefined block filters — uNmINeD's "Default filters" set (ids, order
+/// and labels from uNmINeD 0.20.11's `PredefinedFilters`; membership
+/// follows its MIT-licensed default block tags, re-expressed as OMT
+/// patterns), plus OMT's Glass. Old OMT ids load through serde aliases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Preset {
     Water,
     Lava,
+    #[serde(alias = "SnowIce")]
+    Snow,
+    Ice,
+    Grass,
+    Flowers,
+    #[serde(alias = "Trees")]
+    TreeLogs,
     Leaves,
-    Trees,
-    Plants,
-    SnowIce,
+    Vine,
+    Seagrass,
+    #[serde(alias = "Plants")]
+    Flora,
+    Natural,
+    #[serde(alias = "Torches")]
+    Torch,
+    Ores,
+    Artificial,
+    Technical,
     Glass,
-    Torches,
 }
 
+const GRASS: &[&str] = &["*:*roots", "*:*wart", "*:*bush", "*:deadbush", "*:leaf_litter", "*:*grass", "*:tallgrass", "*:double_plant", "*:small_dripleaf", "*:*fern"];
+const FLOWERS: &[&str] = &[
+    "*:*flower", "*:*flowers", "*:*allium", "*:*bluet", "*:*orchid", "*:*dandelion", "*:*lavender", "*:*lilac", "*:lily_of_the_valley", "*:*lily_pad", "*:*tulip", "*:*lily", "*:*daisy", "*:*peony", "*:*poppy", "*:*rose", "*:*violet", "*:*waterlily",
+    "*:spore_blossom", "*:*_flowered", "*:*_eyeblossom", "*:*_petals", "*:pitcher_plant",
+];
+const LEAVES: &[&str] = &["*:*leaves", "*:*foliage"];
+const LOGS: &[&str] = &["*:*log", "*:*logs"];
+const VINES: &[&str] = &["*:*vine", "*:*vines", "*:*vines_plant", "*:cave_vines*"];
+const SEAGRASS: &[&str] = &["*:*seagrass", "*:*kelp", "*:*kelp_plant"];
+const FLORA_EXTRA: &[&str] = &[
+    "*:brown_mushroom_block", "*:red_mushroom_block", "*:shroomlight", "*:azalea", "*:flowering_azalea", "*:big_dripleaf", "*:resin_clump", "*:cactus", "*:sugar_cane", "*:reeds", "*:chorus_plant", "*:bamboo", "*:*sapling", "*:*stem",
+    "*:*sprout", "*:*sprouts", "*:*_fungus", "*:*mushroom", "*:*lichen", "*:cocoa", "*:melon", "*:pumpkin",
+];
+
 impl Preset {
-    pub const ALL: [Preset; 8] = [Self::Water, Self::Lava, Self::Leaves, Self::Trees, Self::Plants, Self::SnowIce, Self::Glass, Self::Torches];
+    pub const ALL: [Preset; 17] = [
+        Self::Water, Self::Lava, Self::Snow, Self::Ice, Self::Grass, Self::Flowers, Self::TreeLogs, Self::Leaves, Self::Vine, Self::Seagrass, Self::Flora, Self::Natural, Self::Torch, Self::Ores, Self::Artificial, Self::Technical, Self::Glass,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Water => "Water (see the sea floor)",
+            Self::Water => "Water",
             Self::Lava => "Lava",
+            Self::Snow => "Snow",
+            Self::Ice => "Ice",
+            Self::Grass => "Grass",
+            Self::Flowers => "Flowers",
+            Self::TreeLogs => "Tree logs",
             Self::Leaves => "Leaves",
-            Self::Trees => "Trees (logs + leaves)",
-            Self::Plants => "Plants, flowers & crops",
-            Self::SnowIce => "Snow & ice",
+            Self::Vine => "Vine",
+            Self::Seagrass => "Seagrass and kelp",
+            Self::Flora => "Flora",
+            Self::Natural => "Natural",
+            Self::Torch => "Torch",
+            Self::Ores => "Ores",
+            Self::Artificial => "Artificial",
+            Self::Technical => "Technical (barrier, command, etc)",
             Self::Glass => "Glass",
-            Self::Torches => "Torches & lights",
         }
     }
 
-    /// Patterns this filter hides.
-    pub fn patterns(self) -> &'static [&'static str] {
+    /// Patterns this filter hides (`@natural` / `@artificial` use the
+    /// [`is_natural`] classifier).
+    pub fn patterns(self) -> Vec<&'static str> {
         match self {
-            Self::Water => &["water", "bubble_column", "seagrass", "tall_seagrass", "kelp", "kelp_plant"],
-            Self::Lava => &["lava"],
-            Self::Leaves => &["*_leaves"],
-            Self::Trees => &["*_leaves", "*_log", "*_wood", "*_stem", "*_hyphae", "mangrove_roots", "bamboo"],
-            Self::Plants => &[
-                "short_grass", "grass", "tall_grass", "fern", "large_fern", "dead_bush", "*_sapling", "*_flower", "*_tulip", "dandelion", "poppy", "blue_orchid", "allium",
-                "azure_bluet", "oxeye_daisy", "cornflower", "lily_of_the_valley", "sunflower", "lilac", "rose_bush", "peony", "*_mushroom", "wheat", "carrots", "potatoes",
-                "beetroots", "sugar_cane", "vine", "*_vines", "*_vines_plant", "sweet_berry_bush", "pink_petals", "*_roots", "*_fungus", "*_bush", "lily_pad", "cactus", "melon_stem",
-                "pumpkin_stem", "pitcher_plant", "torchflower", "*_grass", "leaf_litter", "wildflowers",
-            ],
-            Self::SnowIce => &["snow", "snow_block", "powder_snow", "ice", "packed_ice", "blue_ice", "frosted_ice"],
-            Self::Glass => &["glass", "*_glass", "glass_pane", "*_glass_pane", "tinted_glass"],
-            Self::Torches => &["torch", "wall_torch", "*_torch", "*_wall_torch", "lantern", "*_lantern", "end_rod", "*_candle", "candle"],
+            Self::Water => vec!["*:*water", "*:bubble_column"],
+            Self::Lava => vec!["*:*lava"],
+            Self::Snow => vec!["*:*snow", "*:*snow_layer", "*:*snow_block"],
+            Self::Ice => vec!["*:*ice"],
+            Self::Grass => GRASS.to_vec(),
+            Self::Flowers => FLOWERS.to_vec(),
+            Self::TreeLogs => LOGS.to_vec(),
+            Self::Leaves => LEAVES.to_vec(),
+            Self::Vine => VINES.to_vec(),
+            Self::Seagrass => SEAGRASS.to_vec(),
+            Self::Flora => [LEAVES, LOGS, FLORA_EXTRA, FLOWERS, GRASS, SEAGRASS, VINES].concat(),
+            Self::Natural => vec!["@natural"],
+            Self::Torch => vec!["*:*torch"],
+            Self::Ores => vec!["*:*_ore", "*:ancient_debris"],
+            Self::Artificial => vec!["@artificial"],
+            Self::Technical => vec!["*:*command_block", "*:*structure_block", "*:structure_void", "*:light", "*:barrier", "*:jigsaw"],
+            Self::Glass => vec!["*:glass", "*:*_glass", "*:glass_pane", "*:*_glass_pane"],
         }
     }
+}
+
+/// Natural (generated) blocks: terrain, fluids, ores, flora — uNmINeD's
+/// `#natural` tag semantics. Everything else that is not air counts as
+/// artificial.
+pub fn is_natural(name: &str) -> bool {
+    let id = name.split_once(':').map_or(name, |(_, i)| i);
+    const EXACT: &[&str] = &[
+        "stone", "granite", "diorite", "andesite", "deepslate", "tuff", "calcite", "bedrock", "netherrack", "basalt", "smooth_basalt", "blackstone", "end_stone", "obsidian", "crying_obsidian", "sandstone", "red_sandstone", "dirt", "coarse_dirt",
+        "rooted_dirt", "grass_block", "grass", "podzol", "mycelium", "dirt_path", "grass_path", "sand", "red_sand", "suspicious_sand", "gravel", "suspicious_gravel", "clay", "mud", "moss_block", "moss_carpet", "pale_moss_block", "pale_moss_carpet",
+        "pale_hanging_moss", "soul_sand", "soul_soil", "magma", "magma_block", "terracotta", "hardened_clay", "stained_hardened_clay", "dripstone_block", "pointed_dripstone", "amethyst_block", "budding_amethyst", "amethyst_cluster", "fire",
+        "soul_fire", "crimson_nylium", "warped_nylium", "nether_wart_block", "warped_wart_block", "glow_lichen", "sculk", "sculk_vein", "bone_block", "sea_pickle", "hanging_roots", "packed_mud", "snow", "powder_snow",
+    ];
+    if EXACT.contains(&id) {
+        return true;
+    }
+    let suffix = |s: &str| id.ends_with(s);
+    if (suffix("_terracotta") && !suffix("_glazed_terracotta")) || suffix("_amethyst_bud") || suffix("_ore") || id == "ancient_debris" || id.contains("coral") || id.starts_with("infested_") {
+        return true;
+    }
+    for pats in [&["*:*water", "*:bubble_column", "*:*lava", "*:*snow", "*:*snow_block", "*:*ice"][..], LEAVES, LOGS, FLORA_EXTRA, FLOWERS, GRASS, SEAGRASS, VINES] {
+        if pats.iter().any(|p| matches(p, name)) {
+            return true;
+        }
+    }
+    false
 }
 
 impl std::fmt::Display for Preset {
@@ -222,6 +293,11 @@ pub fn parse_list(text: &str) -> Vec<String> {
 /// Does `name` (`minecraft:oak_leaves`) match `pattern`? The namespace is
 /// optional in the pattern; `*` matches any run of characters.
 pub fn matches(pattern: &str, name: &str) -> bool {
+    match pattern {
+        "@natural" => return is_natural(name),
+        "@artificial" => return !is_natural(name) && !name.ends_with(":air") && !name.ends_with("cave_air") && !name.ends_with("void_air"),
+        _ => {}
+    }
     let (pns, pid) = pattern.split_once(':').map_or((None, pattern), |(a, b)| (Some(a), b));
     let (nns, nid) = name.split_once(':').unwrap_or(("minecraft", name));
     if pns.is_some_and(|ns| ns != "*" && ns != nns) {
@@ -341,6 +417,13 @@ mod tests {
         assert!(matches("minecraft:glass*", "minecraft:glass_pane"));
         assert!(!matches("mod:*", "minecraft:stone"));
         assert!(!matches("leaves", "minecraft:oak_leaves"));
+        assert!(matches("@natural", "minecraft:deepslate_iron_ore") && matches("@natural", "minecraft:oak_leaves") && matches("@natural", "minecraft:water"));
+        assert!(matches("@artificial", "minecraft:oak_planks") && matches("@artificial", "minecraft:red_wool") && !matches("@artificial", "minecraft:air"));
+        assert!(!matches("@natural", "minecraft:stone_bricks") && !matches("@natural", "minecraft:white_glazed_terracotta"));
+        // uNmINeD presets: seagrass + kelp, technical blocks.
+        assert!(Preset::Seagrass.patterns().iter().any(|p| matches(p, "minecraft:kelp_plant")));
+        assert!(Preset::Technical.patterns().iter().any(|p| matches(p, "minecraft:chain_command_block")));
+        assert!(Preset::Grass.patterns().iter().any(|p| matches(p, "minecraft:short_grass")) && !Preset::Grass.patterns().iter().any(|p| matches(p, "minecraft:grass_block")));
         assert_eq!(parse_list("water, lava;*_leaves  ice"), vec!["water", "lava", "*_leaves", "ice"]);
     }
 

@@ -266,7 +266,7 @@ mod tests {
         let mut d = RulesDraft::default();
         assert!(r.compile().is_default());
         assert!(apply(&mut r, &mut d, RulesMsg::Preset(Preset::Leaves, true)));
-        assert!(r.compile().hide.contains(&"*_leaves".to_string()));
+        assert!(r.compile().hide.contains(&"*:*leaves".to_string()));
         assert!(apply(&mut r, &mut d, RulesMsg::FilterOn(false)));
         assert!(r.compile().hide.is_empty());
         d.color_name = "stone".into();
