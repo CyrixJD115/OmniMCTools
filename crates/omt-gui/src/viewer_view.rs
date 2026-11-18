@@ -313,9 +313,20 @@ impl ViewerState {
         let slime_note = if !self.bedrock && self.seed.is_none() { " (seed unknown)" } else { "" };
         let mut col = column![heading("VIEW MODES"), switch("Underground (caves)", self.cave, ViewerMsg::Cave)].spacing(8);
         col = col.push(switch("Slicer", self.slicer.is_some(), ViewerMsg::Slicer));
+        let (lo, hi) = if self.ctl.dim == 1 { (0, 127) } else { (-64, 319) };
+        // uNmINeD's slicer steps: one block / one section.
+        let steps = |y: i32, f: fn(i32) -> ViewerMsg| -> Element<'_, ViewerMsg> {
+            [-16, -1, 1, 16]
+                .iter()
+                .fold(row![].spacing(4), |r, &d| r.push(button(text(format!("{d:+}")).size(11).center()).width(Length::Fill).padding([3, 4]).on_press(f((y + d).clamp(lo, hi))).style(style::button_style(Btn::Chip))))
+                .into()
+        };
         if let Some(y) = self.slicer {
-            let (lo, hi) = if self.ctl.dim == 1 { (0, 127) } else { (-64, 319) };
-            col = col.push(labeled("Hide blocks above Y", y.to_string(), slider(lo..=hi, y, ViewerMsg::SlicerY).into()));
+            col = col.push(labeled("Hide blocks above Y", y.to_string(), slider(lo..=hi, y, ViewerMsg::SlicerY).into())).push(steps(y, ViewerMsg::SlicerY));
+        }
+        col = col.push(switch("Hide below", self.slicer_min.is_some(), move |v| ViewerMsg::SlicerMin(v.then_some(0.max(lo)))));
+        if let Some(m) = self.slicer_min {
+            col = col.push(labeled("Hide blocks below Y", m.to_string(), slider(lo..=hi, m, |v| ViewerMsg::SlicerMin(Some(v))).into())).push(steps(m, |v| ViewerMsg::SlicerMin(Some(v))));
         }
         col = col.push(switch("Biome colors", p.biome_tint, |v| ViewerMsg::Layer(Layer::BiomeTint, v)));
         col = col.push(switch(if crate::textures::current().is_some() { "Block textures when zoomed in" } else { "Block textures (no pack — see Settings)" }, p.textured, |v| ViewerMsg::Layer(Layer::Textures, v)));
@@ -355,7 +366,8 @@ impl ViewerState {
             ]
             .spacing(6)
             .align_y(Alignment::Center),
-            text("Click the map to fill X/Z. Left-drag measures a distance. Arrows pan, +/− zoom, * resets, Ctrl+G cycles the grid.").size(11).color(style::hint()),
+            text("Click the map to fill X/Z (or type “x z”, “spawn”, “player”). Left-drag measures a distance. Arrows pan, +/− zoom, * resets, Ctrl+G cycles the grid.").size(11).color(style::hint()),
+            self.copy_actions(),
         ]
         .spacing(8);
         let mine = self.my_bookmarks(bookmarks);

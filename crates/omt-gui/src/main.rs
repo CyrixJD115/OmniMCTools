@@ -52,6 +52,7 @@ mod viewer_3d_input;
 mod viewer_blocks;
 mod viewer_export;
 mod viewer_tex;
+mod viewer_types;
 mod viewer_view;
 mod world_edit;
 mod world_edit_3d;

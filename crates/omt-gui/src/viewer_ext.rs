@@ -536,3 +536,20 @@ impl ViewerState {
         col.push(note("Renders fresh from the world with the current style, filters and stylesheet; large areas stream to disk.")).into()
     }
 }
+
+impl ViewerState {
+    /// uNmINeD's copy commands for the clicked location (the go-to fields):
+    /// block name, biome name, region file.
+    pub fn copy_actions(&self) -> Element<'_, ViewerMsg> {
+        use crate::panelui::action;
+        let at = match (self.goto.0.trim().parse::<i32>(), self.goto.1.trim().parse::<i32>()) {
+            (Ok(x), Ok(z)) => Some((x, z)),
+            _ => None,
+        };
+        let copy = |s: Option<String>| s.map(|s| ext(ExtMsg::List(ListMsg::Copy(s))));
+        let block = at.and_then(|(x, z)| self.ctl.map.as_ref()?.identify(x, z).map(|(n, _, _)| n.to_string()));
+        let biome = at.and_then(|(x, z)| self.ctl.map.as_ref()?.biome_at(x, z).map(str::to_owned));
+        let region = at.map(|(x, z)| if self.bedrock { format!("chunk {}, {} (LevelDB)", x.div_euclid(16), z.div_euclid(16)) } else { format!("r.{}.{}.mca", x.div_euclid(512), z.div_euclid(512)) });
+        iced::widget::row![action("Copy block", copy(block)), action("Copy biome", copy(biome)), action(if self.bedrock { "Copy chunk" } else { "Copy region file" }, copy(region))].spacing(4).into()
+    }
+}

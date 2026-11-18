@@ -137,8 +137,9 @@ impl crate::mapdata::MapData {
     /// Surface blocks of the display-level tiles, most common first.
     pub fn block_legend(&self) -> Vec<(String, usize)> {
         let mut m: HashMap<String, usize> = HashMap::new();
+        let level = self.legend_level();
         for (k, t) in &self.tiles {
-            if k.level != self.level {
+            if k.level != level {
                 continue;
             }
             let mut local: HashMap<u16, usize> = HashMap::new();
@@ -158,11 +159,21 @@ impl crate::mapdata::MapData {
         v
     }
 
+    /// Level the legends count: the display level, or the finest level
+    /// with loaded tiles while the display level is still rendering.
+    fn legend_level(&self) -> u8 {
+        if self.tiles.keys().any(|k| k.level == self.level) {
+            return self.level;
+        }
+        self.tiles.keys().map(|k| k.level).min().unwrap_or(self.level)
+    }
+
     /// Biomes of the display-level tiles, most common first.
     pub fn biome_legend(&self) -> Vec<(String, usize)> {
         let mut m = HashMap::new();
+        let level = self.legend_level();
         for (k, t) in &self.tiles {
-            if k.level == self.level {
+            if k.level == level {
                 t.biome_counts(&mut m);
             }
         }
