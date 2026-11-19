@@ -187,6 +187,15 @@ impl Gpu {
 /// View-projection for a [`Cam3`] (same framing as the CPU renderers)
 /// relative to a mesh `origin` (x, z); returns (matrix, eye).
 pub(crate) fn view_proj(cam: &Cam3, origin: (f64, f64), w: u32, h: u32) -> (Mat4, Vec3) {
+    if cam.ortho > 0.0 {
+        // Isometric: look along the heading, 30° down, from far away.
+        let target = Vec3::new((cam.x - origin.0) as f32, cam.y, (cam.z - origin.1) as f32);
+        let down = 30f32.to_radians();
+        let fwd = Vec3::new(cam.yaw.sin() * down.cos(), -down.sin(), -cam.yaw.cos() * down.cos());
+        let eye = target - fwd * 2000.0;
+        let (hh, hw) = (cam.ortho, cam.ortho * w as f32 / h.max(1) as f32);
+        return (Mat4::orthographic_rh(-hw, hw, -hh, hh, 1.0, 5000.0) * Mat4::look_to_rh(eye, fwd, Vec3::Y), eye);
+    }
     let eye = Vec3::new((cam.x - origin.0) as f32, cam.y, (cam.z - origin.1) as f32);
     let focal = (w as f32 / 2.0) / (cam.fov / 2.0).tan();
     // The CPU renderer's horizon shift → a look-up angle.

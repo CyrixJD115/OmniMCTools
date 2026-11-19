@@ -60,6 +60,8 @@ pub enum ViewerMsg {
     Iso(Option<u8>),
     /// Iso detail: flat map colors or textured block looks.
     IsoTextured(bool),
+    /// Iso detail: 0 colors, 1 textured (CPU), 2 3D blocks (GPU).
+    IsoDetail(u8),
     Ev3(crate::viewer_3d::Ev3),
     Grid3(Arc<omt_render::voxel::Grid>, Option<crate::viewer_3d::GpuMesh>),
     Gpu3(bool),
@@ -341,7 +343,14 @@ impl ViewerState {
                         return Task::batch([t, self.set_iso(Some(rot.parse().unwrap_or(0)), store)]);
                     }
                     if let Some(rot) = mode.strip_prefix("iso") {
-                        return Task::batch([t, self.set_iso(Some(rot.parse().unwrap_or(0)), store)]);
+                        // `isob<rot>` = 3D blocks detail, `isot<rot>` = textured.
+                        let (detail, rot) = match rot.strip_prefix('b') {
+                            Some(r) => (2, r),
+                            None => rot.strip_prefix('t').map_or((0, rot), |r| (1, r)),
+                        };
+                        let enter = self.set_iso(Some(rot.parse().unwrap_or(0)), store);
+                        let d = if detail > 0 { self.set_iso_detail(detail, store) } else { Task::none() };
+                        return Task::batch([t, enter, d]);
                     }
                     let enter = self.set_3d(true, store);
                     let detail = if mode == "blocks" { self.set_detail(true, store) } else { Task::none() };
@@ -356,6 +365,7 @@ impl ViewerState {
             }
             ViewerMsg::Mode3D(on) => self.set_3d(on, store),
             ViewerMsg::Iso(rot) => self.set_iso(rot, store),
+            ViewerMsg::IsoDetail(d) => self.set_iso_detail(d, store),
             ViewerMsg::IsoTextured(on) => {
                 if self.v3.iso_textured != on {
                     self.v3.iso_textured = on;

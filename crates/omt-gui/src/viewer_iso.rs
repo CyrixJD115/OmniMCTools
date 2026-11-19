@@ -99,12 +99,73 @@ impl ViewerState {
             None => true,
         };
         let grid = if regrid { self.recenter_3d(store) } else { Task::none() };
-        Task::batch([grid, self.request_frame()])
+        // 3D blocks: rebuild the block mesh when the view moved away from it.
+        let blocks = if self.v3.iso_blocks {
+            let (bx, bz) = self.v3.iso_bcenter;
+            let off = ((self.v3.iso_cam.x - bx).powi(2) + (self.v3.iso_cam.z - bz).powi(2)).sqrt();
+            if off > self.prefs.block_distance as f64 * 0.4 { self.request_iso_blocks(store) } else { Task::none() }
+        } else {
+            Task::none()
+        };
+        Task::batch([grid, blocks, self.request_frame()])
+    }
+
+    /// Iso detail: 0 colors, 1 textured (CPU painter), 2 GPU 3D blocks.
+    pub(crate) fn set_iso_detail(&mut self, d: u8, store: Option<&Store>) -> Task<ViewerMsg> {
+        let textured = d >= 1;
+        let blocks = d == 2 && omt_gpu::gpu().is_some();
+        if d == 2 && !blocks {
+            self.status = "3D blocks need a GPU — showing the textured painter".into();
+        }
+        let mut tasks = Vec::new();
+        if textured != self.v3.iso_textured {
+            self.v3.iso_textured = textured;
+            tasks.push(self.recenter_3d(store));
+        }
+        if blocks != self.v3.iso_blocks {
+            self.v3.iso_blocks = blocks;
+            self.v3.blocks = blocks;
+            if blocks {
+                tasks.push(self.request_iso_blocks(store));
+            } else {
+                self.v3.bgrid = None;
+                self.v3.bmesh = None;
+            }
+        }
+        self.v3.iso_pan = (0.0, 0.0);
+        tasks.push(self.request_frame());
+        Task::batch(tasks)
+    }
+
+    /// Build the GPU block mesh around the iso centre.
+    fn request_iso_blocks(&mut self, store: Option<&Store>) -> Task<ViewerMsg> {
+        let ground = self.v3.grid.as_ref().and_then(|g| g.at(self.v3.iso_cam.x, self.v3.iso_cam.z)).map_or(64.0, |(h, _)| h);
+        // The block window spans 140 below to 60 above this height.
+        self.v3.cam.y = ground + 50.0;
+        self.v3.iso_bcenter = (self.v3.iso_cam.x, self.v3.iso_cam.z);
+        self.request_blocks(store)
     }
 
     /// An iso frame job for the current grid.
     pub(crate) fn iso_frame(&self, sky: [u8; 3]) -> Option<Box<dyn FnOnce() -> iced::widget::image::Handle + Send>> {
         self.v3.iso?;
+        if self.v3.iso_blocks
+            && let Some(mesh) = self.v3.bmesh.clone()
+        {
+            // Orthographic camera matching the CPU painter's framing: a
+            // block's top diagonal spans 2·scale logical pixels.
+            let (w, h) = self.render_px(1.0);
+            let logical_h = self.v3.size.1.max(1) as f32;
+            let ortho = logical_h / (2.0 * std::f32::consts::SQRT_2 * self.v3.iso_cam.scale);
+            let yaw = (self.v3.iso_cam.rot as f32 * 90.0 - 45.0).to_radians();
+            let ground = self.v3.bgrid.as_ref().and_then(|b| b.top_at(self.v3.iso_cam.x.floor() as i32, self.v3.iso_cam.z.floor() as i32)).map_or(self.v3.cam.y - 50.0, |t| t as f32 + 1.0);
+            let cam = omt_render::voxel::Cam3 { x: self.v3.iso_cam.x, z: self.v3.iso_cam.z, y: ground, yaw, pitch: 0.0, far: 1.0e6, ortho, ..Default::default() };
+            let skyc = (sky, sky);
+            return Some(Box::new(move || match omt_gpu::gpu() {
+                Some(g) => iced::widget::image::Handle::from_rgba(w, h, g.render_blocks(&mesh.0, &cam, w, h, skyc)),
+                None => iced::widget::image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+            }));
+        }
         let grid = self.v3.grid.clone()?;
         let (w, h) = self.render_px(1.0);
         let cam: IsoCam = self.v3.iso_cam;

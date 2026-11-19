@@ -143,6 +143,11 @@ pub struct View3 {
     pub iso_cam: omt_render::iso::IsoCam,
     /// Iso "Textured" detail (block looks instead of flat map colors).
     pub iso_textured: bool,
+    /// Iso detail "3D blocks": the GPU textured block mesh drawn with an
+    /// isometric (orthographic) camera.
+    pub iso_blocks: bool,
+    /// Centre the iso block grid was built around.
+    pub iso_bcenter: (f64, f64),
     /// Screen-space drag offset accumulated since the shown iso frame was
     /// rendered: during a pan the frame is drawn shifted by this, and the
     /// next full render (on release / big offset) resets it.

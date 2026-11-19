@@ -110,11 +110,15 @@ pub struct Cam3 {
     pub far: f32,
     /// Vertical exaggeration.
     pub scale: f32,
+    /// Orthographic isometric projection (GPU renderers): half the view
+    /// height in blocks; `0` = perspective. The view looks along `yaw`,
+    /// 30° down (2:1 isometric), centred on (`x`, `y`, `z`).
+    pub ortho: f32,
 }
 
 impl Default for Cam3 {
     fn default() -> Self {
-        Self { x: 0.0, z: 0.0, y: 120.0, yaw: 0.0, pitch: 0.12, fov: 1.2, far: 700.0, scale: 1.0 }
+        Self { x: 0.0, z: 0.0, y: 120.0, yaw: 0.0, pitch: 0.12, fov: 1.2, far: 700.0, scale: 1.0, ortho: 0.0 }
     }
 }
 
