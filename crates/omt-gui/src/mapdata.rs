@@ -582,8 +582,9 @@ impl MapController {
             let epoch = Arc::clone(&self.epoch);
             let cache = disk_cache(&cfg);
             let dim = self.dim;
+            let threads = cfg.threads as usize;
             tasks.push(Task::perform(
-                blocking(move || build(src, dim, key, reads, opts, wanted, epoch, g, cache)),
+                blocking(move || omt_render::workers::install(threads, || build(src, dim, key, reads, opts, wanted, epoch, g, cache))),
                 move |r| MapMsg::Tile(g, key, r),
             ));
         }

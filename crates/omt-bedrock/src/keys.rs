@@ -20,11 +20,19 @@ pub mod tag {
     pub const DATA_3D: u8 = 0x2b;
     /// Current chunk version (single u8, 42 in the 1.26.52 fixtures).
     pub const VERSION: u8 = 0x2c;
-    /// Legacy pre-1.18 2D data.
+    /// Pre-1.18 2D data: heightmap + 256 biome ids (`Data2D`).
     pub const DATA_2D_LEGACY: u8 = 0x2d;
+    /// Older 2D data: heightmap + 256 × (biome id, rgb) (`Data2DLegacy`).
+    pub const DATA_2D_OLD: u8 = 0x2e;
+    /// Pre-1.0 whole-column terrain (`LegacyTerrain`).
+    pub const LEGACY_TERRAIN: u8 = 0x30;
+    /// Chunk version before 1.16.100 (`VersionOld`).
+    pub const VERSION_OLD: u8 = 0x76;
     pub const SUBCHUNK_PREFIX: u8 = 0x2f;
     /// Block entities per chunk, little-endian NBT.
     pub const BLOCK_ENTITIES: u8 = 0x31;
+    /// Pre-1.18.30 entities stored in the chunk (concatenated LE NBT).
+    pub const LEGACY_ENTITIES: u8 = 0x32;
     /// Block ticks ("currentTick"/"tickList" NBT).
     pub const BLOCK_TICKS: u8 = 0x33;
     pub const EDGES: u8 = 0x35;

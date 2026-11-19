@@ -10,8 +10,13 @@
 
 use rayon::prelude::*;
 
+/// The grid sampler: height, map color and surface kind id per cell.
+pub type Sample<'a> = dyn Fn(f64, f64) -> Option<(f32, [u8; 3], u16)> + Sync + 'a;
+
 /// A square height + color field (row-major, `n × n` cells of `cell`
 /// blocks, top-left at block (`x0`, `z0`)). Heights `f32::NAN` = empty.
+/// `kind[i]` indexes [`Grid::kinds`] (the surface block's look for the
+/// textured isometric view); [`Grid::NO_KIND`] = no look recorded.
 #[derive(Debug, Clone)]
 pub struct Grid {
     pub x0: f64,
@@ -20,41 +25,51 @@ pub struct Grid {
     pub n: usize,
     pub height: Vec<f32>,
     pub color: Vec<[u8; 3]>,
+    pub kind: Vec<u16>,
+    pub kinds: Vec<crate::blocks3d::Kind>,
 }
 
+/// Kind id for cells with no known surface block.
+pub const NO_KIND: u16 = u16::MAX;
+
 impl Grid {
-    /// Build by sampling `f(x, z) -> (height, rgb)` at every cell center.
-    pub fn build(cx: f64, cz: f64, radius: f64, n: usize, f: &(dyn Fn(f64, f64) -> Option<(f32, [u8; 3])> + Sync)) -> Self {
+    /// Build by sampling `f(x, z) -> (height, rgb, kind)` at every cell
+    /// center (`kind` = index into `kinds`, [`NO_KIND`] = none).
+    pub fn build(cx: f64, cz: f64, radius: f64, n: usize, kinds: Vec<crate::blocks3d::Kind>, f: &Sample<'_>) -> Self {
         let cell = (2.0 * radius / n as f64).max(1.0);
         let (x0, z0) = (cx - cell * n as f64 / 2.0, cz - cell * n as f64 / 2.0);
-        let rows: Vec<(Vec<f32>, Vec<[u8; 3]>)> = (0..n)
+        type Row = (Vec<f32>, Vec<[u8; 3]>, Vec<u16>);
+        let rows: Vec<Row> = (0..n)
             .into_par_iter()
             .map(|r| {
                 let mut h = Vec::with_capacity(n);
                 let mut c = Vec::with_capacity(n);
+                let mut k = Vec::with_capacity(n);
                 for q in 0..n {
                     let (x, z) = (x0 + (q as f64 + 0.5) * cell, z0 + (r as f64 + 0.5) * cell);
                     match f(x, z) {
-                        Some((hh, cc)) => {
+                        Some((hh, cc, kk)) => {
                             h.push(hh);
                             c.push(cc);
+                            k.push(kk);
                         }
                         None => {
                             h.push(f32::NAN);
                             c.push([0; 3]);
+                            k.push(NO_KIND);
                         }
                     }
                 }
-                (h, c)
+                (h, c, k)
             })
             .collect();
-        let mut height = Vec::with_capacity(n * n);
-        let mut color = Vec::with_capacity(n * n);
-        for (h, c) in rows {
-            height.extend(h);
-            color.extend(c);
-        }
-        Self { x0, z0, cell, n, height, color }
+        let (height, color, kind) = rows.into_iter().fold((Vec::with_capacity(n * n), Vec::with_capacity(n * n), Vec::with_capacity(n * n)), |(mut h, mut c, mut k), (rh, rc, rk)| {
+            h.extend(rh);
+            c.extend(rc);
+            k.extend(rk);
+            (h, c, k)
+        });
+        Self { x0, z0, cell, n, height, color, kind, kinds }
     }
 
     pub fn at(&self, x: f64, z: f64) -> Option<(f32, [u8; 3])> {
@@ -95,11 +110,15 @@ pub struct Cam3 {
     pub far: f32,
     /// Vertical exaggeration.
     pub scale: f32,
+    /// Orthographic isometric projection (GPU renderers): half the view
+    /// height in blocks; `0` = perspective. The view looks along `yaw`,
+    /// 30° down (2:1 isometric), centred on (`x`, `y`, `z`).
+    pub ortho: f32,
 }
 
 impl Default for Cam3 {
     fn default() -> Self {
-        Self { x: 0.0, z: 0.0, y: 120.0, yaw: 0.0, pitch: 0.12, fov: 1.2, far: 700.0, scale: 1.0 }
+        Self { x: 0.0, z: 0.0, y: 120.0, yaw: 0.0, pitch: 0.12, fov: 1.2, far: 700.0, scale: 1.0, ortho: 0.0 }
     }
 }
 
@@ -177,10 +196,10 @@ mod tests {
     #[test]
     fn hill_ahead_rises_above_flat_ground() {
         // Flat ground at y=60 with a tall red pillar 50 blocks north.
-        let f = |x: f64, z: f64| -> Option<(f32, [u8; 3])> {
-            if (x.abs() < 6.0) && (z + 50.0).abs() < 6.0 { Some((150.0, [200, 30, 30])) } else { Some((60.0, [40, 160, 40])) }
+        let f = |x: f64, z: f64| -> Option<(f32, [u8; 3], u16)> {
+            if (x.abs() < 6.0) && (z + 50.0).abs() < 6.0 { Some((150.0, [200, 30, 30], NO_KIND)) } else { Some((60.0, [40, 160, 40], NO_KIND)) }
         };
-        let g = Grid::build(0.0, 0.0, 128.0, 256, &f);
+        let g = Grid::build(0.0, 0.0, 128.0, 256, Vec::new(), &f);
         assert_eq!(g.n, 256);
         let cam = Cam3 { y: 90.0, ..Default::default() };
         let (w, h) = (64, 48);

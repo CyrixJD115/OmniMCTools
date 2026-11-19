@@ -20,6 +20,7 @@ impl ViewerState {
         }
         self.v3.on = on;
         if !on {
+            self.v3.iso = None;
             self.capture(false);
             self.v3.grid = None;
             self.v3.frame = None;
@@ -67,13 +68,33 @@ impl ViewerState {
             return Task::none();
         }
         self.v3.building = true;
-        let (cx, cz, r) = (self.v3.cam.x, self.v3.cam.z, self.v3.cam.far as f64);
-        let use_gpu = self.v3.gpu;
+        let (cx, cz) = (self.v3.cam.x, self.v3.cam.z);
+        let r = if self.v3.iso.is_some() { self.iso_radius() } else { self.v3.cam.far as f64 };
+        // Isometric frames are drawn on the CPU: no GPU mesh needed.
+        let use_gpu = self.v3.gpu && self.v3.iso.is_none();
         Task::perform(
             blocking(move || {
                 let gpu = if use_gpu { omt_gpu::gpu() } else { None };
                 let n = if gpu.is_some() { GRID_N_GPU } else { GRID_N };
-                let grid = Arc::new(Grid::build(cx, cz, r, n, &|x, z| snap.sample(x, z)));
+                // Surface block looks for the textured iso (interned once
+                // per name; kinds stay empty when nothing loaded).
+                let pack = crate::textures::current();
+                let kinds: std::sync::Mutex<Vec<omt_render::blocks3d::Kind>> = std::sync::Mutex::new(Vec::new());
+                let seen: std::sync::Mutex<std::collections::HashMap<String, u16>> = std::sync::Mutex::new(std::collections::HashMap::new());
+                let mut grid = Grid::build(cx, cz, r, n, Vec::new(), &|x, z| {
+                    let (h, c, name) = snap.sample_full(x, z)?;
+                    let kid = match name {
+                        Some(n) => *seen.lock().unwrap_or_else(|e| e.into_inner()).entry(n.to_string()).or_insert_with(|| {
+                            let mut ks = kinds.lock().unwrap_or_else(|e| e.into_inner());
+                            ks.push(crate::viewer_blocks::kind_of(n, pack.as_deref()));
+                            (ks.len() - 1) as u16
+                        }),
+                        None => omt_render::voxel::NO_KIND,
+                    };
+                    Some((h, c, kid))
+                });
+                grid.kinds = kinds.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let grid = Arc::new(grid);
                 let mesh = gpu.map(|g| GpuMesh(Arc::new(g.mesh(&grid))));
                 (grid, mesh)
             }),
@@ -173,6 +194,14 @@ impl ViewerState {
         let cam = self.v3.cam;
         type Job = Box<dyn FnOnce() -> Handle + Send>;
         type GpuJob = Box<dyn FnOnce(&omt_gpu::Gpu) -> Vec<u8> + Send>;
+        if self.v3.iso.is_some() {
+            let Some(job) = self.iso_frame(sky.1) else { return Task::none() };
+            self.v3.rendering = true;
+            return Task::perform(blocking(job), |h| h).then(|h: Handle| {
+                let shown = h.clone();
+                iced::widget::image::allocate(h).map(move |a| ViewerMsg::Frame3(shown.clone(), a.ok()))
+            });
+        }
         let gpu_frame = |f: GpuJob, w: u32, h: u32| -> Job {
             Box::new(move || match omt_gpu::gpu() {
                 Some(g) => Handle::from_rgba(w, h, f(&g)),
@@ -220,6 +249,8 @@ impl ViewerState {
     pub(crate) fn on_frame(&mut self, h: Handle, alloc: Option<iced::widget::image::Allocation>) -> Task<ViewerMsg> {
         self.v3.rendering = false;
         self.v3.frame = Some(h);
+        // The new frame matches the camera exactly: no drag offset anymore.
+        self.v3.iso_pan = (0.0, 0.0);
         // Replacing the allocation releases the previous frame's upload.
         self.v3.alloc = alloc;
         if std::mem::take(&mut self.v3.frame_dirty) { self.request_frame() } else { Task::none() }

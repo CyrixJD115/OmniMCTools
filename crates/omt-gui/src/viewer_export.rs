@@ -65,3 +65,352 @@ pub fn write_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) -> Result<
     let mut wr = enc.write_header().map_err(|e| e.to_string())?;
     wr.write_image_data(rgba).map_err(|e| e.to_string())
 }
+
+// ------------------------------------------------------------ area export
+//
+// uNmINeD's "Image export": any area (the view, the whole world, or a
+// block rectangle) at a chosen zoom, rendered fresh from the world in
+// style-matched map tiles and streamed into the PNG one tile row at a
+// time (memory stays at one row of tiles, whatever the image size).
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use omt_render::style::StyleParams;
+use omt_render::{MapSource, Palette, RenderOptions, TILE_CHUNKS, TILE_PX};
+
+/// Which area to export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Area {
+    #[default]
+    View,
+    World,
+    Custom,
+}
+
+impl Area {
+    pub const ALL: [Area; 3] = [Self::View, Self::World, Self::Custom];
+}
+
+impl std::fmt::Display for Area {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::View => "Visible view",
+            Self::World => "Entire world",
+            Self::Custom => "Custom area",
+        })
+    }
+}
+
+/// Export zoom: `-4..=-1` = 16/8/4/2 blocks per pixel, `0` = 1:1, `1`/`2`
+/// = 2/4 pixels per block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Zoom(pub i8);
+
+impl Zoom {
+    pub const ALL: [Zoom; 7] = [Zoom(-4), Zoom(-3), Zoom(-2), Zoom(-1), Zoom(0), Zoom(1), Zoom(2)];
+    /// Render level (blocks per pixel = 2^level) and integer upscale.
+    pub fn level_scale(self) -> (u8, u32) {
+        if self.0 < 0 { ((-self.0) as u8, 1) } else { (0, 1 << self.0) }
+    }
+}
+
+impl std::fmt::Display for Zoom {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            z if z < 0 => write!(f, "1:{} ({} blocks per pixel)", 1 << -z, 1 << -z),
+            0 => f.write_str("1:1 (1 pixel per block)"),
+            z => write!(f, "{}:1 ({} pixels per block)", 1 << z, 1 << z),
+        }
+    }
+}
+
+/// Export form state.
+#[derive(Debug)]
+pub struct ExportState {
+    pub area: Area,
+    pub zoom: Zoom,
+    pub min: (String, String),
+    pub max: (String, String),
+    /// Background behind empty pixels: `None` = transparent.
+    pub background: String,
+    pub trim: bool,
+    pub busy: Option<(Arc<AtomicBool>, Arc<AtomicU64>, u64)>,
+    pub status: String,
+    /// Web map: most detailed level (0 = 1:1).
+    pub web_detail: u8,
+    pub web_changed_only: bool,
+    pub web_grid: bool,
+    pub web_players: bool,
+}
+
+impl Default for ExportState {
+    fn default() -> Self {
+        Self { area: Area::View, zoom: Zoom(0), min: ("-512".into(), "-512".into()), max: ("511".into(), "511".into()), background: String::new(), trim: true, busy: None, status: String::new(), web_detail: 0, web_changed_only: true, web_grid: false, web_players: true }
+    }
+}
+
+/// A resolved export job.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AreaJob {
+    /// Block rectangle (inclusive min, exclusive max).
+    pub x0: i64,
+    pub z0: i64,
+    pub x1: i64,
+    pub z1: i64,
+    pub level: u8,
+    pub scale: u32,
+    pub background: Option<[u8; 3]>,
+}
+
+impl AreaJob {
+    pub fn px_size(&self) -> (u64, u64) {
+        let bpp = 1i64 << self.level;
+        let w = ((self.x1 - self.x0) as u64).div_ceil(bpp as u64) * self.scale as u64;
+        let h = ((self.z1 - self.z0) as u64).div_ceil(bpp as u64) * self.scale as u64;
+        (w, h)
+    }
+
+    /// Working memory estimate (one row of tiles + PNG row buffers).
+    pub fn memory_bytes(&self) -> u64 {
+        let (w, _) = self.px_size();
+        w * TILE_PX as u64 * 4 * 3
+    }
+}
+
+/// Largest exported edge (PNG limit is 2^31; keep files sane).
+pub const MAX_EXPORT_EDGE: u64 = 65_536;
+
+/// Resolve the form into a job (`Err` = message for the user).
+pub fn resolve(st: &ExportState, ctl: &MapController) -> Result<AreaJob, String> {
+    let map = ctl.map.as_ref().ok_or("the map is still loading")?;
+    let (mut x0, mut z0, mut x1, mut z1) = match st.area {
+        Area::View => {
+            let (a, b, c, d) = ctl.camera.visible_blocks(ctl.view);
+            (a.floor() as i64, b.floor() as i64, c.ceil() as i64, d.ceil() as i64)
+        }
+        Area::World => {
+            let (a, b, c, d) = map.source.chunks().bounds().ok_or("this dimension has no chunks")?;
+            (a as i64 * 16, b as i64 * 16, (c as i64 + 1) * 16, (d as i64 + 1) * 16)
+        }
+        Area::Custom => {
+            let p = |s: &str| s.trim().parse::<i64>().map_err(|_| format!("“{s}” is not a block coordinate"));
+            let (a, b, c, d) = (p(&st.min.0)?, p(&st.min.1)?, p(&st.max.0)?, p(&st.max.1)?);
+            (a.min(c), b.min(d), a.max(c) + 1, b.max(d) + 1)
+        }
+    };
+    if st.trim
+        && let Some((a, b, c, d)) = map.source.chunks().bounds()
+    {
+        x0 = x0.max(a as i64 * 16);
+        z0 = z0.max(b as i64 * 16);
+        x1 = x1.min((c as i64 + 1) * 16);
+        z1 = z1.min((d as i64 + 1) * 16);
+    }
+    if x1 <= x0 || z1 <= z0 {
+        return Err("the area holds no chunks".into());
+    }
+    let background = match st.background.trim() {
+        "" => None,
+        s => Some(crate::panelui::parse_color(s).ok_or("background: use #rrggbb or leave empty for transparent")?),
+    };
+    let (level, scale) = st.zoom.level_scale();
+    let job = AreaJob { x0, z0, x1, z1, level, scale, background };
+    let (w, h) = job.px_size();
+    if w > MAX_EXPORT_EDGE || h > MAX_EXPORT_EDGE {
+        return Err(format!("{w}×{h} px is too large (max {MAX_EXPORT_EDGE} per edge) — zoom out"));
+    }
+    Ok(job)
+}
+
+/// How to render an export: the map's options, style and CPU budget.
+#[derive(Debug, Clone, Copy)]
+pub struct Look {
+    pub opts: RenderOptions,
+    pub style: StyleParams,
+    pub threads: usize,
+}
+
+/// Render `job` and stream it into a PNG at `path`. `done` counts tiles.
+pub fn export_area(src: &MapSource, look: Look, job: AreaJob, path: &std::path::Path, cancel: &AtomicBool, done: &AtomicU64) -> Result<String, String> {
+    let Look { opts, style, threads } = look;
+    let (w, h) = job.px_size();
+    let format = Format::of(path);
+    let mut sink = match format {
+        Format::Png => {
+            let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+            let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            Sink::Png(Box::new(enc.write_header().map_err(|e| e.to_string())?.into_stream_writer().map_err(|e| e.to_string())?))
+        }
+        Format::Other(_) if w * h > MAX_BUFFERED_PX => return Err(format!("{w}×{h} px is too large for this format (max {} MP) — use PNG, which streams", MAX_BUFFERED_PX / 1_000_000)),
+        Format::Other(_) => Sink::Buffer(Vec::with_capacity((w * h * 4) as usize)),
+    };
+    let span_blocks = (TILE_CHUNKS as i64 * 16) << job.level;
+    let bpp = 1i64 << job.level;
+    let (tx0, tx1) = (job.x0.div_euclid(span_blocks), (job.x1 - 1).div_euclid(span_blocks));
+    let (tz0, tz1) = (job.z0.div_euclid(span_blocks), (job.z1 - 1).div_euclid(span_blocks));
+    let row_px = (w / job.scale as u64) as usize;
+    let cancelled = || cancel.load(Ordering::Relaxed);
+    for tz in tz0..=tz1 {
+        if cancelled() {
+            return Err("cancelled".into());
+        }
+        // Render this row of tiles (in parallel on the render pool).
+        let tiles: Vec<Option<(usize, Vec<u8>)>> = omt_render::workers::install(threads, || {
+            use rayon::prelude::*;
+            (tx0..=tx1)
+                .into_par_iter()
+                .map(|tx| {
+                    let key = TileKey::new(job.level, tx as i32, tz as i32);
+                    let t = omt_render::build_tile(src, key, None, Palette::embedded(), &opts, &cancelled)?;
+                    done.fetch_add(1, Ordering::Relaxed);
+                    if t.px == 0 {
+                        return Some((0, Vec::new()));
+                    }
+                    let view = omt_render::style::TileView { px: t.px as usize, bpp: span_blocks as f32 / t.px as f32, rgba: &t.rgba, heights: &t.heights, surface: &t.surface, biomes: &t.biomes, names: &t.names };
+                    Some((t.px as usize, omt_render::style::stylize(&view, &style)))
+                })
+                .collect()
+        });
+        // Output rows covered by this tile row.
+        let tile_z0 = tz * span_blocks;
+        let first = ((job.z0.max(tile_z0) - job.z0) / bpp) as usize;
+        let last = ((job.z1.min(tile_z0 + span_blocks) - job.z0 + bpp - 1) / bpp) as usize;
+        let bg = job.background.map(|c| [c[0], c[1], c[2], 255]);
+        let mut line = vec![0u8; row_px * 4];
+        let mut scaled = vec![0u8; w as usize * 4];
+        for oy in first..last {
+            let bz = job.z0 + oy as i64 * bpp;
+            let ty = ((bz - tile_z0) / bpp) as usize;
+            for (ox, px) in line.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let bx = job.x0 + ox as i64 * bpp;
+                let tx = bx.div_euclid(span_blocks);
+                let lx = ((bx - tx * span_blocks) / bpp) as usize;
+                let src_px = tiles.get((tx - tx0) as usize).and_then(|t| t.as_ref()).and_then(|(tpx, rgba)| rgba.get((ty * tpx + lx) * 4..(ty * tpx + lx) * 4 + 4));
+                *px = match (src_px, bg) {
+                    (Some(p), _) if p[3] != 0 => [p[0], p[1], p[2], p[3]],
+                    (_, Some(b)) => b,
+                    _ => [0; 4],
+                };
+            }
+            if job.scale == 1 {
+                sink.write(&line)?;
+            } else {
+                for (i, px) in line.as_chunks::<4>().0.iter().enumerate() {
+                    for k in 0..job.scale as usize {
+                        let o = (i * job.scale as usize + k) * 4;
+                        scaled[o..o + 4].copy_from_slice(px);
+                    }
+                }
+                for _ in 0..job.scale {
+                    sink.write(&scaled)?;
+                }
+            }
+        }
+    }
+    match (sink, format) {
+        (Sink::Png(wr), _) => wr.finish().map_err(|e| e.to_string())?,
+        (Sink::Buffer(buf), Format::Other(f)) => {
+            let img = image::RgbaImage::from_raw(w as u32, h as u32, buf).ok_or("image buffer size mismatch")?;
+            // JPEG has no alpha: flatten onto the background (or the map's dark).
+            if f == image::ImageFormat::Jpeg {
+                let bg = job.background.unwrap_or([17, 19, 23]);
+                let rgb = image::RgbImage::from_fn(w as u32, h as u32, |x, y| {
+                    let p = img.get_pixel(x, y).0;
+                    let a = p[3] as u32;
+                    image::Rgb([0, 1, 2].map(|k| ((p[k] as u32 * a + bg[k] as u32 * (255 - a)) / 255) as u8))
+                });
+                rgb.save_with_format(path, f).map_err(|e| e.to_string())?;
+            } else {
+                img.save_with_format(path, f).map_err(|e| e.to_string())?;
+            }
+        }
+        (Sink::Buffer(_), Format::Png) => unreachable!("PNG always streams"),
+    }
+    Ok(format!("exported {w}×{h} px to {}", path.display()))
+}
+
+/// Non-PNG formats are encoded from memory: cap their size.
+pub const MAX_BUFFERED_PX: u64 = 200_000_000;
+
+/// Output format chosen by the file extension (PNG streams).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Format {
+    Png,
+    Other(image::ImageFormat),
+}
+
+impl Format {
+    fn of(path: &std::path::Path) -> Self {
+        match image::ImageFormat::from_path(path) {
+            Ok(image::ImageFormat::Png) | Err(_) => Self::Png,
+            Ok(f) => Self::Other(f),
+        }
+    }
+}
+
+enum Sink {
+    Png(Box<png::StreamWriter<'static, std::io::BufWriter<std::fs::File>>>),
+    Buffer(Vec<u8>),
+}
+
+impl Sink {
+    fn write(&mut self, row: &[u8]) -> Result<(), String> {
+        match self {
+            Self::Png(w) => std::io::Write::write_all(w, row).map_err(|e| e.to_string()),
+            Self::Buffer(b) => {
+                b.extend_from_slice(row);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Save-dialog filters for the image export.
+pub const FORMATS: [(&str, &[&str]); 6] = [("PNG image", &["png"]), ("JPEG image", &["jpg", "jpeg"]), ("WebP image", &["webp"]), ("TIFF image", &["tif", "tiff"]), ("BMP image", &["bmp"]), ("QOI image", &["qoi"])];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_and_job_sizes() {
+        assert_eq!(Zoom(-2).level_scale(), (2, 1));
+        assert_eq!(Zoom(2).level_scale(), (0, 4));
+        let job = AreaJob { x0: -100, z0: 0, x1: 100, z1: 50, level: 1, scale: 1, background: None };
+        assert_eq!(job.px_size(), (100, 25));
+        let up = AreaJob { level: 0, scale: 2, ..job };
+        assert_eq!(up.px_size(), (400, 100));
+    }
+
+    /// Fixture-gated: `OMT_EXPORT_FIXTURE=<java world>` exports a 1:2 image
+    /// of the world's core and checks the PNG.
+    #[test]
+    #[ignore = "needs OMT_EXPORT_FIXTURE=<java world folder>"]
+    fn export_area_writes_png() {
+        let Ok(root) = std::env::var("OMT_EXPORT_FIXTURE") else { return };
+        let w = std::sync::Arc::new(omt_java::JavaWorld::open(std::path::Path::new(&root)).unwrap());
+        let src = MapSource::java(&w, 0).unwrap();
+        let (a, b, c, d) = src.chunks().core_bounds(0.02).unwrap();
+        let job = AreaJob { x0: a as i64 * 16, z0: b as i64 * 16, x1: (c as i64 + 1) * 16, z1: (d as i64 + 1) * 16, level: 1, scale: 1, background: Some([10, 20, 30]) };
+        let out = std::env::temp_dir().join(format!("omt-export-{}.png", std::process::id()));
+        let look = Look { opts: RenderOptions { relief: false, ..Default::default() }, style: StyleParams::default(), threads: 2 };
+        let msg = export_area(&src, look, job, &out, &AtomicBool::new(false), &AtomicU64::new(0)).unwrap();
+        let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&out).unwrap()));
+        let r = dec.read_info().unwrap();
+        let (w, h) = job.px_size();
+        assert_eq!((r.info().width as u64, r.info().height as u64), (w, h), "{msg}");
+        let _ = std::fs::remove_file(out);
+        // Buffered formats (JPEG flattens alpha, WebP keeps it).
+        let small = AreaJob { level: 3, ..job };
+        for ext in ["jpg", "webp"] {
+            let p = std::env::temp_dir().join(format!("omt-export-{}.{ext}", std::process::id()));
+            export_area(&src, look, small, &p, &AtomicBool::new(false), &AtomicU64::new(0)).unwrap();
+            let img = image::open(&p).unwrap();
+            assert_eq!((img.width() as u64, img.height() as u64), small.px_size(), "{ext}");
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}

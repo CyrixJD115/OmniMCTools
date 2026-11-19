@@ -146,6 +146,20 @@ impl Palette {
         self.blocks.get(&mapped.state.name).copied().unwrap_or(BlockColor::UNKNOWN)
     }
 
+    /// Every block of the colour table (registry view), sorted by name.
+    pub fn block_entries(&self) -> Vec<(&str, BlockColor)> {
+        let mut v: Vec<(&str, BlockColor)> = self.blocks.iter().map(|(k, c)| (k.as_str(), *c)).collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        v
+    }
+
+    /// Every biome with its tints (registry view), sorted by name.
+    pub fn biome_entries(&self) -> Vec<(&str, BiomeColors)> {
+        let mut v: Vec<(&str, BiomeColors)> = self.biomes.iter().map(|(k, c)| (k.as_str(), *c)).collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        v
+    }
+
     pub fn biome(&self, java_name: &str) -> BiomeColors {
         self.biomes.get(java_name).copied().unwrap_or(BiomeColors::DEFAULT)
     }
@@ -180,5 +194,27 @@ mod tests {
         assert_eq!(p.block(&st("minecraft:stone")).rgba[3], 255);
         assert_eq!(p.biome("minecraft:plains").grass, 0x91bd59, "vanilla plains grass");
         assert_eq!(p.block(&st("mod:thing")), BlockColor::UNKNOWN);
+    }
+
+    #[test]
+    fn every_legacy_id_has_a_color() {
+        let p = Palette::embedded();
+        let mut missing = Vec::new();
+        for id in 0..256u16 {
+            for data in 0..16u8 {
+                for name in [omt_world::legacy::java_block(id, data), omt_world::legacy::bedrock_block(id, data)] {
+                    if !p.blocks.contains_key(name) && !missing.contains(&name) {
+                        missing.push(name);
+                    }
+                }
+            }
+        }
+        for id in 0..256u32 {
+            let b = omt_world::legacy::biome(id);
+            if !p.biomes.contains_key(b) && !missing.contains(&b) {
+                missing.push(b);
+            }
+        }
+        assert!(missing.is_empty(), "legacy names without colors: {missing:?}");
     }
 }

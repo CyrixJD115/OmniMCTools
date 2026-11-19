@@ -226,8 +226,17 @@ impl Subchunk {
             return Err(SubchunkError::UnsupportedVersion(0));
         }
         let version = buf[0];
-        if version != 8 && version != 9 {
-            return Err(SubchunkError::UnsupportedVersion(version));
+        match version {
+            8 | 9 => {}
+            // 1.2.13 beta: one palette storage, no count byte.
+            1 => {
+                let mut r = Reader::with_offset(buf, ByteOrder::Little, 1);
+                let storage = parse_storage(&mut r)?;
+                return Ok(Self { version: 8, y: key_y.unwrap_or(0), storages: vec![storage] });
+            }
+            // Pre-1.2.13 numeric ids (see `crate::legacy`).
+            0 | 2..=7 => return crate::legacy::parse_numeric_subchunk(buf, key_y).ok_or(SubchunkError::UnsupportedVersion(version)),
+            _ => return Err(SubchunkError::UnsupportedVersion(version)),
         }
         if buf.len() < 2 {
             return Err(SubchunkError::UnsupportedVersion(version));

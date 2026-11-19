@@ -6,6 +6,7 @@
 
 pub mod chunkset;
 pub mod detect;
+pub mod legacy;
 pub mod sysmem;
 pub mod packing;
 pub mod path;

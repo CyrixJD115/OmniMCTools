@@ -11,83 +11,14 @@ use std::sync::Arc;
 
 use iced::Task;
 use omt_render::markers::PlayerMarker;
-use omt_render::style::{MapStyle, StyleParams};
+use omt_render::style::MapStyle;
 use omt_render::RenderOptions;
-use serde::{Deserialize, Serialize};
 
 use crate::mapdata::{MapController, MapMsg};
 use crate::mapview::MapEvent;
 use crate::session::{Store, WorldSession, blocking};
 
-/// Remembered viewer look (Settings TOML).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ViewerPrefs {
-    pub style: StyleParams,
-    /// `None` = automatic.
-    pub chunk_grid: Option<bool>,
-    pub region_grid: bool,
-    pub slime: bool,
-    pub spawn: bool,
-    pub players: bool,
-    pub bookmarks: bool,
-    pub hud: bool,
-    pub biome_tint: bool,
-    /// Real block textures when zoomed in (needs a texture pack).
-    pub textured: bool,
-    /// Entity pins when zoomed in.
-    pub entities: bool,
-    /// Rulers along the map edges.
-    pub ruler: crate::mapview_overlay::Ruler,
-    /// 3D render resolution relative to the screen's pixels (1 = native).
-    pub render_scale: f32,
-    /// 3D "Blocks" render distance (blocks from the camera).
-    pub block_distance: i32,
-    /// 3D mouse controls.
-    pub controls: crate::viewer_3d_input::Controls3,
-    /// 3D collision (Normal stays above ground, Spectator flies through).
-    pub movement: crate::viewer_3d_input::Move3,
-    /// Look sensitivity multiplier.
-    pub look_sens: f32,
-    /// Keyboard fly speed (blocks / second; Ctrl × 2.5).
-    pub fly_speed: f32,
-}
-
-impl Default for ViewerPrefs {
-    fn default() -> Self {
-        Self { style: StyleParams::default(), chunk_grid: None, region_grid: false, slime: false, spawn: true, players: true, bookmarks: true, hud: true, biome_tint: true, textured: true, entities: true, ruler: crate::mapview_overlay::Ruler::Blocks, render_scale: 1.0,
-            block_distance: 192,
-            controls: crate::viewer_3d_input::Controls3::Drag,
-            movement: crate::viewer_3d_input::Move3::Normal,
-            look_sens: 1.0,
-            fly_speed: 20.0,
-        }
-    }
-}
-
-/// A saved place.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Bookmark {
-    pub world: PathBuf,
-    pub dim: u8,
-    pub x: i32,
-    pub z: i32,
-    pub name: String,
-}
-
-/// Layer toggles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Layer {
-    RegionGrid,
-    Slime,
-    Spawn,
-    Players,
-    Bookmarks,
-    Hud,
-    BiomeTint,
-    Textures,
-    Entities,
-}
+pub use crate::viewer_types::{Bookmark, Layer, PanelTab, ViewerKey, ViewerPrefs};
 
 #[derive(Debug, Clone)]
 pub enum ViewerMsg {
@@ -100,11 +31,14 @@ pub enum ViewerMsg {
     Strength(f32),
     Contour(i32),
     Ambient(f32),
+    Shadows(f32),
     ChunkGrid(Option<bool>),
     Layer(Layer, bool),
     Cave(bool),
     Slicer(bool),
     SlicerY(i32),
+    /// Slicer floor: hide blocks below Y (`None` = off).
+    SlicerMin(Option<i32>),
     GotoX(String),
     GotoZ(String),
     Goto,
@@ -122,6 +56,12 @@ pub enum ViewerMsg {
     TexCell((i32, i32), u64, Option<iced::widget::image::Handle>),
     /// 3D terrain view on/off.
     Mode3D(bool),
+    /// Isometric view at a view angle (0..3); `None` = 2D map.
+    Iso(Option<u8>),
+    /// Iso detail: flat map colors or textured block looks.
+    IsoTextured(bool),
+    /// Iso detail: 0 colors, 1 textured (CPU), 2 3D blocks (GPU).
+    IsoDetail(u8),
     Ev3(crate::viewer_3d::Ev3),
     Grid3(Arc<omt_render::voxel::Grid>, Option<crate::viewer_3d::GpuMesh>),
     Gpu3(bool),
@@ -144,6 +84,26 @@ pub enum ViewerMsg {
     Ruler(crate::mapview_overlay::Ruler),
     Entities((i32, i32, i32, i32), Arc<Vec<omt_render::markers::EntityMarker>>),
     BGrid(Result<(Arc<omt_render::blocks3d::BlockGrid>, Option<crate::viewer_3d::GpuBlocks>), String>),
+    /// Open this world in another tool (the compact "Tools" menu).
+    OpenIn(crate::session::App),
+    /// Center on the world spawn (switches to the Overworld first).
+    GotoSpawn,
+    /// Center on the nearest player marker.
+    GotoPlayer,
+    /// Copy the pointed block as a `/tp x y z` command.
+    CopyTp,
+    /// Back to 1:1 zoom (keyboard `*`).
+    ZoomReset,
+    /// Auto → on → off → auto (keyboard Ctrl+G).
+    CycleChunkGrid,
+    /// Open/close a side-panel tab.
+    Panel(Option<PanelTab>),
+    /// The floating "Tools" menu is open or closed.
+    ToolsMenu(bool),
+    /// Keyboard navigation from the app subscription.
+    Key(ViewerKey),
+    /// uNmINeD-parity panels (see `viewer_ext`).
+    Ext(crate::viewer_ext::ExtMsg),
 }
 
 pub struct ViewerState {
@@ -151,6 +111,8 @@ pub struct ViewerState {
     pub prefs: ViewerPrefs,
     pub cave: bool,
     pub slicer: Option<i32>,
+    /// Slicer floor (hide below).
+    pub slicer_min: Option<i32>,
     pub goto: (String, String),
     pub bookmark_name: String,
     pub players: Vec<PlayerMarker>,
@@ -171,6 +133,9 @@ pub struct ViewerState {
     /// Debug/testing hook (`OMT_DEBUG_VIEWER_3D=1|blocks[@x,z]`): enter
     /// 3D (optionally block detail at a position) once loaded.
     debug3d: Option<String>,
+    /// Debug/testing hook (`OMT_DEBUG_VIEWER_MENU=1`): keep the Tools menu
+    /// pinned open (for headless screenshots).
+    debug_menu: bool,
     /// Biome legend of the loaded tiles (Biomes style) + tile count it saw.
     pub legend: Vec<(String, usize)>,
     legend_tiles: usize,
@@ -181,17 +146,28 @@ pub struct ViewerState {
     /// Distance measurement (left-drag on the map).
     pub measure: Option<[(f64, f64); 2]>,
     measuring: bool,
+    /// The floating "Tools" menu (open world in another tool) is showing.
+    pub tools_menu: bool,
+    /// Extension panels' state (`viewer_ext`).
+    pub ext: crate::viewer_ext::Ext,
 }
 
 impl ViewerState {
-    pub fn new(sess: &WorldSession, prefs: ViewerPrefs) -> Self {
-        let mut ctl = MapController::new(0, Self::opts_for(0, false, None, prefs.biome_tint));
+    pub fn new(sess: &WorldSession, mut prefs: ViewerPrefs) -> Self {
+        if let Some(d) = prefs.default_preset.clone()
+            && let Some(p) = prefs.presets.iter().find(|p| p.name == d).cloned()
+        {
+            p.apply_to(&mut prefs);
+        }
+        let rules = omt_render::rules::register(prefs.rules.compile());
+        let mut ctl = MapController::new(0, Self::opts_for(0, false, None, prefs.biome_tint, rules));
         ctl.post = Some(prefs.style);
         Self {
             ctl,
             prefs,
             cave: false,
             slicer: None,
+            slicer_min: None,
             goto: (String::new(), String::new()),
             bookmark_name: String::new(),
             players: Vec::new(),
@@ -206,6 +182,7 @@ impl ViewerState {
             v3: crate::viewer_3d::View3 { gpu: true, ..Default::default() },
             regrid: false,
             debug3d: std::env::var("OMT_DEBUG_VIEWER_3D").ok(),
+            debug_menu: std::env::var("OMT_DEBUG_VIEWER_MENU").is_ok(),
             legend: Vec::new(),
             legend_tiles: usize::MAX,
             entities: Arc::default(),
@@ -213,17 +190,42 @@ impl ViewerState {
             ent_busy: false,
             measure: None,
             measuring: false,
+            // `OMT_DEBUG_VIEWER_MENU=1` pins the Tools menu open (screenshots).
+            tools_menu: std::env::var("OMT_DEBUG_VIEWER_MENU").is_ok(),
+            ext: crate::viewer_ext::Ext::with_rules(rules),
         }
     }
 
     /// Render options: no baked relief (the style lights the map).
-    fn opts_for(dim: u8, cave: bool, slicer: Option<i32>, tint: bool) -> RenderOptions {
+    fn opts_for(dim: u8, cave: bool, slicer: Option<i32>, tint: bool, rules: u64) -> RenderOptions {
         let base = RenderOptions::for_dimension(dim);
-        RenderOptions { relief: false, cave, max_y: slicer.or(base.max_y), biome_tint: tint, ..base }
+        RenderOptions { relief: false, cave, max_y: slicer.or(base.max_y), biome_tint: tint, rules, ..base }
+    }
+
+    /// Render options for dimension `dim` with the current look.
+    fn opts_dim(&self, dim: u8) -> RenderOptions {
+        let mut o = Self::opts_for(dim, self.cave, self.slicer, self.prefs.biome_tint, self.ext.rules_id);
+        if let Some(m) = self.slicer_min {
+            o.min_y = o.min_y.max(m);
+        }
+        o
     }
 
     fn opts(&self) -> RenderOptions {
-        Self::opts_for(self.ctl.dim, self.cave, self.slicer, self.prefs.biome_tint)
+        self.opts_dim(self.ctl.dim)
+    }
+
+    /// Switch to `dim` (when needed) and center on (x, z).
+    pub(crate) fn goto_dim(&mut self, sess: &WorldSession, dim: u8, x: f64, z: f64) -> Task<ViewerMsg> {
+        let store = sess.store.as_ref();
+        let mut tasks = Vec::new();
+        if dim != self.ctl.dim {
+            let o = self.opts_dim(dim);
+            tasks.push(self.ctl.set_dim(dim, o, store).map(ViewerMsg::Tiles));
+        }
+        self.center(x, z);
+        tasks.push(self.ctl.refill(store).map(ViewerMsg::Tiles));
+        Task::batch(tasks)
     }
 
     /// Start: load the map and read markers (players, seed) in the background.
@@ -242,7 +244,8 @@ impl ViewerState {
             }),
             |m| ViewerMsg::Markers(Arc::new(m)),
         );
-        Task::batch([tiles, markers])
+        let ext = self.ext_load(sess);
+        Task::batch([tiles, markers, ext])
     }
 
     pub fn status_line(&self) -> String {
@@ -253,12 +256,12 @@ impl ViewerState {
         }
     }
 
-    fn rerender(&mut self, store: Option<&Store>) -> Task<ViewerMsg> {
+    pub(crate) fn rerender(&mut self, store: Option<&Store>) -> Task<ViewerMsg> {
         let o = self.opts();
         self.ctl.set_options(o, store).map(ViewerMsg::Tiles)
     }
 
-    fn restyle(&mut self) {
+    pub(crate) fn restyle(&mut self) {
         self.ctl.set_post(Some(self.prefs.style));
         self.regrid = true;
     }
@@ -299,6 +302,27 @@ impl ViewerState {
     }
 
     pub fn update(&mut self, sess: &WorldSession, bookmarks: &mut Vec<Bookmark>, m: ViewerMsg) -> Task<ViewerMsg> {
+        // Any interaction closes the floating "Tools" menu; background tile
+        // work, viewport resizes and panel toggles don't. The debug hook
+        // (`OMT_DEBUG_VIEWER_MENU=1`) pins it open for screenshots.
+        if !self.debug_menu {
+            match &m {
+                ViewerMsg::Tiles(_)
+                | ViewerMsg::TexCell(_, _, _)
+                | ViewerMsg::Markers(_)
+                | ViewerMsg::Entities(_, _)
+                | ViewerMsg::Frame3(_, _)
+                | ViewerMsg::Grid3(_, _)
+                | ViewerMsg::BGrid(_)
+                | ViewerMsg::Dpi3(_)
+                | ViewerMsg::Ev3(_)
+                | ViewerMsg::ToolsMenu(_)
+                | ViewerMsg::Panel(_)
+                | ViewerMsg::Ext(_) => {}
+                ViewerMsg::Map(MapEvent::Resize(_)) => {}
+                _ => self.tools_menu = false,
+            }
+        }
         let store = sess.store.as_ref();
         let task = match m {
             ViewerMsg::Tiles(t) => {
@@ -313,13 +337,45 @@ impl ViewerState {
                         self.ctl.camera.cx = xz[0];
                         self.ctl.camera.cz = xz[1];
                     }
+                    if let Some(rot) = mode.strip_prefix("isot") {
+                        // Isometric + textured detail (headless testing).
+                        self.v3.iso_textured = true;
+                        return Task::batch([t, self.set_iso(Some(rot.parse().unwrap_or(0)), store)]);
+                    }
+                    if let Some(rot) = mode.strip_prefix("iso") {
+                        // `isob<rot>` = 3D blocks detail, `isot<rot>` = textured.
+                        let (detail, rot) = match rot.strip_prefix('b') {
+                            Some(r) => (2, r),
+                            None => rot.strip_prefix('t').map_or((0, rot), |r| (1, r)),
+                        };
+                        let enter = self.set_iso(Some(rot.parse().unwrap_or(0)), store);
+                        let d = if detail > 0 { self.set_iso_detail(detail, store) } else { Task::none() };
+                        return Task::batch([t, enter, d]);
+                    }
                     let enter = self.set_3d(true, store);
                     let detail = if mode == "blocks" { self.set_detail(true, store) } else { Task::none() };
                     return Task::batch([t, enter, detail]);
                 }
                 t
             }
+            ViewerMsg::Mode3D(on) if on && self.v3.iso.is_some() => {
+                // Iso → perspective 3D: same grid, perspective camera.
+                self.v3.iso = None;
+                self.request_grid()
+            }
             ViewerMsg::Mode3D(on) => self.set_3d(on, store),
+            ViewerMsg::Iso(rot) => self.set_iso(rot, store),
+            ViewerMsg::IsoDetail(d) => self.set_iso_detail(d, store),
+            ViewerMsg::IsoTextured(on) => {
+                if self.v3.iso_textured != on {
+                    self.v3.iso_textured = on;
+                    self.v3.iso_pan = (0.0, 0.0);
+                    // The grid may predate the flag: rebuild it for the
+                    // surface looks, then render.
+                    return Task::batch([self.recenter_3d(store), self.request_frame()]);
+                }
+                Task::none()
+            }
             ViewerMsg::Ev3(e) => self.on_ev3(e, store),
             ViewerMsg::Grid3(g, m) => self.on_grid(g, m),
             ViewerMsg::Gpu3(on) => {
@@ -389,7 +445,7 @@ impl ViewerState {
             ViewerMsg::Map(e) => self.on_event(e, store),
             ViewerMsg::MapUi(_) => self.ctl.refill(store).map(ViewerMsg::Tiles),
             ViewerMsg::Dim(d) => {
-                let o = Self::opts_for(d, self.cave, self.slicer, self.prefs.biome_tint);
+                let o = self.opts_dim(d);
                 self.ctl.set_dim(d, o, store).map(ViewerMsg::Tiles)
             }
             ViewerMsg::Style(s) => {
@@ -414,6 +470,11 @@ impl ViewerState {
             }
             ViewerMsg::Contour(v) => {
                 self.prefs.style.contour = v;
+                self.restyle();
+                Task::none()
+            }
+            ViewerMsg::Shadows(v) => {
+                self.prefs.style.shadows = v;
                 self.restyle();
                 Task::none()
             }
@@ -442,6 +503,8 @@ impl ViewerState {
                         self.prefs.entities = on;
                         self.ent_rect = None;
                     }
+                    Layer::Border => self.prefs.border = on,
+                    Layer::RegionLabels => self.prefs.region_labels = on,
                     Layer::BiomeTint => {
                         self.prefs.biome_tint = on;
                         return self.rerender(store);
@@ -457,6 +520,10 @@ impl ViewerState {
                 self.slicer = on.then_some(if self.ctl.dim == 1 { 100 } else { 64 });
                 self.rerender(store)
             }
+            ViewerMsg::SlicerMin(m) => {
+                self.slicer_min = m;
+                self.rerender(store)
+            }
             ViewerMsg::SlicerY(y) => {
                 self.slicer = Some(y);
                 self.rerender(store)
@@ -470,7 +537,20 @@ impl ViewerState {
                 Task::none()
             }
             ViewerMsg::Goto => {
-                match (self.goto.0.trim().parse::<f64>(), self.goto.1.trim().parse::<f64>()) {
+                // uNmINeD's location syntax: `spawn`/`s`, `player`/`p`, or
+                // `x z` / `x y z` typed into one field.
+                match self.goto.0.trim().to_lowercase().as_str() {
+                    "spawn" | "s" => return self.update(sess, bookmarks, ViewerMsg::GotoSpawn),
+                    "player" | "p" => return self.update(sess, bookmarks, ViewerMsg::GotoPlayer),
+                    _ => {}
+                }
+                let nums: Vec<f64> = self.goto.0.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|p| p.trim().parse().ok()).collect();
+                let (x, z) = match nums.len() {
+                    2 => (Ok(nums[0]), Ok(nums[1])),
+                    3 => (Ok(nums[0]), Ok(nums[2])),
+                    _ => (self.goto.0.trim().parse::<f64>(), self.goto.1.trim().parse::<f64>()),
+                };
+                match (x, z) {
                     (Ok(x), Ok(z)) => {
                         self.center(x, z);
                         self.status = format!("centered on {x:.0}, {z:.0}");
@@ -505,15 +585,8 @@ impl ViewerState {
             }
             ViewerMsg::GoBookmark(i) => {
                 let Some(b) = self.my_bookmarks(bookmarks).get(i).map(|(_, b)| (*b).clone()) else { return Task::none() };
-                let mut tasks = Vec::new();
-                if b.dim != self.ctl.dim {
-                    let o = Self::opts_for(b.dim, self.cave, self.slicer, self.prefs.biome_tint);
-                    tasks.push(self.ctl.set_dim(b.dim, o, store).map(ViewerMsg::Tiles));
-                }
-                self.center(b.x as f64, b.z as f64);
                 self.ctl.camera.zoom = self.ctl.camera.zoom.max(1.0);
-                tasks.push(self.ctl.refill(store).map(ViewerMsg::Tiles));
-                Task::batch(tasks)
+                self.goto_dim(sess, b.dim, b.x as f64, b.z as f64)
             }
             ViewerMsg::RemoveBookmark(i) => {
                 if let Some(global) = self.my_bookmarks(bookmarks).get(i).map(|(g, _)| *g) {
@@ -552,6 +625,64 @@ impl ViewerState {
                 self.slime_rect = None;
                 Task::none()
             }
+            ViewerMsg::GotoSpawn => {
+                let Some((x, z)) = sess.summary.spawn else {
+                    self.status = "this world has no spawn point".into();
+                    return Task::none();
+                };
+                self.status = format!("centered on spawn {x}, {z}");
+                self.goto_dim(sess, 0, x as f64 + 0.5, z as f64 + 0.5)
+            }
+            ViewerMsg::GotoPlayer => {
+                let target = self.players.iter().find(|p| p.dim == self.ctl.dim).or_else(|| self.players.first()).map(|p| (p.x, p.z, p.dim, p.label.clone()));
+                let Some((x, z, dim, label)) = target else {
+                    self.status = "no player markers in this world".into();
+                    return Task::none();
+                };
+                self.status = format!("centered on {label}");
+                self.goto_dim(sess, dim, x, z)
+            }
+            ViewerMsg::CopyTp => {
+                let (x, z) = self.hover.map_or_else(
+                    || (self.goto.0.trim().parse::<i32>().unwrap_or(0), self.goto.1.trim().parse::<i32>().unwrap_or(0)),
+                    |(x, z)| (x.floor() as i32, z.floor() as i32),
+                );
+                let y = self.ctl.map.as_ref().and_then(|m| m.identify(x, z)).map(|(_, y, _)| y);
+                let tp = match y {
+                    Some(y) => format!("/tp {x} {y} {z}"),
+                    None => format!("/tp {x} ~ {z}"),
+                };
+                self.status = format!("copied {tp}");
+                iced::clipboard::write(tp)
+            }
+            ViewerMsg::ZoomReset => {
+                self.ctl.camera.zoom = 1.0;
+                self.ctl.refill(store).map(ViewerMsg::Tiles)
+            }
+            ViewerMsg::CycleChunkGrid => {
+                self.prefs.chunk_grid = match self.prefs.chunk_grid {
+                    None => Some(true),
+                    Some(true) => Some(false),
+                    Some(false) => None,
+                };
+                self.status = match self.prefs.chunk_grid {
+                    None => "chunk grid: automatic".into(),
+                    Some(true) => "chunk grid: always on".into(),
+                    Some(false) => "chunk grid: off".into(),
+                };
+                Task::none()
+            }
+            ViewerMsg::Panel(p) => {
+                self.prefs.set_panel(p);
+                Task::none()
+            }
+            ViewerMsg::ToolsMenu(open) => {
+                self.tools_menu = open;
+                Task::none()
+            }
+            ViewerMsg::Key(k) => self.update(sess, bookmarks, k.into()),
+            ViewerMsg::OpenIn(_) => Task::none(),
+            ViewerMsg::Ext(m) => self.update_ext(sess, m),
         };
         self.plan_slime();
         if self.prefs.style.style == MapStyle::Biomes
@@ -563,7 +694,9 @@ impl ViewerState {
         }
         let regrid = if std::mem::take(&mut self.regrid) && self.v3.on { self.request_grid() } else { Task::none() };
         let ents = self.plan_entities(store);
-        Task::batch([task, self.plan_textures(), regrid, ents])
+        self.refresh_legends();
+        let hl = self.plan_highlights(store);
+        Task::batch([task, self.plan_textures(), regrid, ents, hl])
     }
 
     /// Query entities of the visible chunks when zoomed in enough.
@@ -654,6 +787,7 @@ impl ViewerState {
                 }
                 Task::none()
             }
+            MapEvent::Press { at, right: false, .. } if self.prefs.panel() == Some(PanelTab::Inspect) && self.ext.inspect.click_select => self.inspect_click(store, at).unwrap_or_else(Task::none),
             MapEvent::Press { at, right: false, .. } => {
                 // Left click fills the go-to fields (copy coordinates) and
                 // starts a measurement (kept only if the pointer moves).

@@ -187,6 +187,15 @@ impl Gpu {
 /// View-projection for a [`Cam3`] (same framing as the CPU renderers)
 /// relative to a mesh `origin` (x, z); returns (matrix, eye).
 pub(crate) fn view_proj(cam: &Cam3, origin: (f64, f64), w: u32, h: u32) -> (Mat4, Vec3) {
+    if cam.ortho > 0.0 {
+        // Isometric: look along the heading, 30° down, from far away.
+        let target = Vec3::new((cam.x - origin.0) as f32, cam.y, (cam.z - origin.1) as f32);
+        let down = 30f32.to_radians();
+        let fwd = Vec3::new(cam.yaw.sin() * down.cos(), -down.sin(), -cam.yaw.cos() * down.cos());
+        let eye = target - fwd * 2000.0;
+        let (hh, hw) = (cam.ortho, cam.ortho * w as f32 / h.max(1) as f32);
+        return (Mat4::orthographic_rh(-hw, hw, -hh, hh, 1.0, 5000.0) * Mat4::look_to_rh(eye, fwd, Vec3::Y), eye);
+    }
     let eye = Vec3::new((cam.x - origin.0) as f32, cam.y, (cam.z - origin.1) as f32);
     let focal = (w as f32 / 2.0) / (cam.fov / 2.0).tan();
     // The CPU renderer's horizon shift → a look-up angle.
@@ -253,10 +262,10 @@ mod tests {
     use super::*;
 
     fn pillar_grid() -> Grid {
-        let f = |x: f64, z: f64| -> Option<(f32, [u8; 3])> {
-            if x.abs() < 6.0 && (z + 50.0).abs() < 6.0 { Some((150.0, [200, 30, 30])) } else { Some((60.0, [40, 160, 40])) }
+        let f = |x: f64, z: f64| -> Option<(f32, [u8; 3], u16)> {
+            if x.abs() < 6.0 && (z + 50.0).abs() < 6.0 { Some((150.0, [200, 30, 30], omt_render::voxel::NO_KIND)) } else { Some((60.0, [40, 160, 40], omt_render::voxel::NO_KIND)) }
         };
-        Grid::build(0.0, 0.0, 128.0, 128, &f)
+        Grid::build(0.0, 0.0, 128.0, 128, Vec::new(), &f)
     }
 
     #[test]

@@ -78,7 +78,7 @@ impl OmniMCTools {
                 // Keep things changed outside the Settings page.
                 self.settings_draft.favorites = self.settings.favorites.clone();
                 self.settings_draft.bookmarks = self.settings.bookmarks.clone();
-                self.settings_draft.viewer = self.settings.viewer;
+                self.settings_draft.viewer = self.settings.viewer.clone();
                 self.settings_draft.theme = self.settings.theme;
                 self.settings_draft.rail_collapsed = self.settings.rail_collapsed;
                 self.settings_draft.texture_pack = self.settings.texture_pack.clone();
@@ -149,6 +149,42 @@ pub(crate) fn handle_hotkey(event: iced::Event, status: iced::event::Status, _wi
     }
     if ctrl && (char_key("f") || char_key("F")) {
         return Some(Message::FocusSearch);
+    }
+    // Map Viewer navigation keys (act only when a viewer is on screen):
+    // arrows pan 16 blocks, Shift+arrows 1, Ctrl+arrows 256; +/− zoom;
+    // * resets to 1:1; Ctrl+G cycles the chunk grid.
+    use crate::viewer::ViewerKey;
+    let zoom_key = |c: &str| key == Key::Character(c.into()) && !modifiers.contains(Modifiers::CTRL);
+    if zoom_key("+") || zoom_key("=") {
+        return Some(Message::ViewerKey(ViewerKey::ZoomIn));
+    }
+    if zoom_key("-") {
+        return Some(Message::ViewerKey(ViewerKey::ZoomOut));
+    }
+    if zoom_key("*") {
+        return Some(Message::ViewerKey(ViewerKey::ZoomReset));
+    }
+    if let Key::Named(named) = &key {
+        let d = if modifiers.contains(Modifiers::SHIFT) {
+            1.0
+        } else if ctrl {
+            256.0
+        } else {
+            16.0
+        };
+        let nav = match named {
+            iced::keyboard::key::Named::ArrowLeft => Some(ViewerKey::Pan(-d, 0.0)),
+            iced::keyboard::key::Named::ArrowRight => Some(ViewerKey::Pan(d, 0.0)),
+            iced::keyboard::key::Named::ArrowUp => Some(ViewerKey::Pan(0.0, -d)),
+            iced::keyboard::key::Named::ArrowDown => Some(ViewerKey::Pan(0.0, d)),
+            _ => None,
+        };
+        if let Some(k) = nav {
+            return Some(Message::ViewerKey(k));
+        }
+    }
+    if ctrl && (char_key("g") || char_key("G")) {
+        return Some(Message::ViewerKey(ViewerKey::CycleChunkGrid));
     }
     None
 }

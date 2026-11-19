@@ -6,9 +6,11 @@
 
 use std::collections::HashMap;
 
-use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input, toggler};
+use iced::widget::{button, column, container, pick_list, row, scrollable, slider, space, text, text_input, toggler};
 use iced::{Element, Length, Task};
 use omt_prune::{Layer, Selection, Shape, TimeOp};
+use omt_render::style::MapStyle;
+use omt_world::Dimension;
 
 use crate::mapdata::{MapController, MapData, MapMsg};
 use crate::mapview::{MapEvent, MapView, Outline, Overlay};
@@ -25,12 +27,21 @@ pub enum Tool {
 
 impl Tool {
     const ALL: [Tool; 4] = [Tool::Box, Tool::Circle, Tool::Polygon, Tool::Split];
-    fn label(self) -> &'static str {
+    /// Glyph for the tool rail button.
+    fn rail_glyph(self) -> omt_art::Glyph {
         match self {
-            Self::Box => "▭ Box",
-            Self::Circle => "◯ Circle",
-            Self::Polygon => "⬠ Polygon",
-            Self::Split => "⟋ Split",
+            Self::Box => omt_art::Glyph::SelBox,
+            Self::Circle => omt_art::Glyph::SelCircle,
+            Self::Polygon => omt_art::Glyph::SelPolygon,
+            Self::Split => omt_art::Glyph::SelSplit,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Box => "Box select",
+            Self::Circle => "Circle select",
+            Self::Polygon => "Polygon select",
+            Self::Split => "Split select",
         }
     }
     fn hint(self) -> &'static str {
@@ -69,6 +80,12 @@ pub enum PrunerMsg {
     Optimize,
     OptimizeDone(Result<String, String>),
     FitView,
+    /// Zoom about the view center (rail buttons).
+    Zoom(f32),
+    /// Show/hide the rendering row (quality · detail · sun).
+    ToggleRender,
+    /// Show/hide the time-selection controls.
+    ToggleTime,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,6 +109,10 @@ pub struct PrunerState {
     time_value: String,
     confirm: bool,
     busy: bool,
+    /// The rendering row (quality/detail/sun) is expanded.
+    render_open: bool,
+    /// The time-selection controls are expanded.
+    time_open: bool,
     pub status: String,
     hover: Option<(f64, f64)>,
     /// Map look (style, grids, ruler, HUD).
@@ -119,6 +140,8 @@ impl Default for PrunerState {
             time_value: "1200".into(),
             confirm: false,
             busy: false,
+            render_open: false,
+            time_open: true,
             status: String::new(),
             hover: None,
         }
@@ -400,6 +423,13 @@ impl PrunerState {
                 self.ctl.fit();
                 return self.ctl.refill(sess.store.as_ref()).map(PrunerMsg::Tiles);
             }
+            PrunerMsg::Zoom(f) => {
+                let at = (self.ctl.camera.cx, self.ctl.camera.cz);
+                self.ctl.camera.zoom_at(f, at);
+                return self.ctl.refill(sess.store.as_ref()).map(PrunerMsg::Tiles);
+            }
+            PrunerMsg::ToggleRender => self.render_open = !self.render_open,
+            PrunerMsg::ToggleTime => self.time_open = !self.time_open,
         }
         Task::none()
     }
@@ -554,14 +584,6 @@ impl PrunerState {
 
     pub fn view<'a>(&'a self, sess: &'a WorldSession) -> Element<'a, PrunerMsg> {
         let bedrock = sess.edition() == omt_world::Edition::Bedrock;
-        let tools = Tool::ALL.iter().fold(row![].spacing(4), |r, &t| {
-            r.push(
-                button(text(t.label()).size(12))
-                    .on_press(PrunerMsg::Tool(t))
-                    .padding([6, 8])
-                    .style(style::button_style(if self.tool == t { Btn::Primary } else { Btn::Standard })),
-            )
-        });
         let time_row = row![
             pick_list([TimeOp::Greater, TimeOp::Equal, TimeOp::Less].map(OpLabel).to_vec(), Some(OpLabel(self.time_op)), |o: OpLabel| PrunerMsg::TimeOp(o.0)).width(64),
             text_input("ticks", &self.time_value).on_input(PrunerMsg::TimeValue).width(Length::Fill),
@@ -620,50 +642,122 @@ impl PrunerState {
                 .style(style::button_style(Btn::Danger))
                 .into()
         };
-        let sidebar = column![
-            text("Tools").size(14),
-            tools,
-            text(self.tool.hint()).size(11).color(style::muted()),
-            text("Hold Ctrl to disable chunk snapping. Wheel zooms, right/middle-drag pans.").size(11).color(style::hint()),
-            time_row,
-            text(time_note).size(11).color(style::muted()),
-            row![optimize, text("Optimize: run a database compaction cycle (Bedrock only).").size(11).color(style::muted())].spacing(6).align_y(iced::Alignment::Center),
-            iced::widget::rule::horizontal(1.0),
-            row![
-                text(format!("Layers ({})", self.selection.layers.len())).size(14),
-                iced::widget::space::horizontal(),
-                button(text("Clear").size(11)).on_press(PrunerMsg::ClearLayers).style(style::button_style(Btn::Ghost)),
-            ]
-            .align_y(iced::Alignment::Center),
-            scrollable(layers).height(Length::Fill),
-            text(format!("{} of {} chunks selected", self.red.len(), total)).size(12),
-            prune_area,
-        ]
-        .spacing(8)
-        .padding(10)
-        .width(300);
+        let head = row![text(self.tool.name()).size(12).font(style::BOLD), iced::widget::space::horizontal()].align_y(iced::Alignment::Center);
+        let mut sidebar = column![head, text(self.tool.hint()).size(11).color(style::muted())].spacing(8);
+        if self.time_open {
+            sidebar = sidebar
+                .push(time_row)
+                .push(text(time_note).size(11).color(style::muted()))
+                .push(row![optimize, text("Optimize: run a database compaction cycle (Bedrock only).").size(11).color(style::muted())].spacing(6).align_y(iced::Alignment::Center));
+        }
+        sidebar = sidebar
+            .push(iced::widget::rule::horizontal(1.0))
+            .push(
+                row![
+                    text(format!("Layers ({})", self.selection.layers.len())).size(14),
+                    iced::widget::space::horizontal(),
+                    button(text("Clear").size(11)).on_press(PrunerMsg::ClearLayers).style(style::button_style(Btn::Ghost)),
+                ]
+                .align_y(iced::Alignment::Center),
+            )
+            .push(scrollable(layers).height(Length::Fill))
+            .push(text(format!("{} of {} chunks selected", self.red.len(), total)).size(12))
+            .push(prune_area);
+        let sidebar = sidebar.padding([8, 10]).width(262);
 
-        let dims = dim_switcher(self.ctl.dim, PrunerMsg::Dim);
         let viewer: Element<'_, PrunerMsg> = match &self.ctl.map {
             Some(map) => crate::mapview::element(MapView { map, camera: self.ctl.camera, overlay: self.overlay(sess.summary.spawn), on_event: Box::new(PrunerMsg::Map) }),
             None => container(text(if self.ctl.loading { self.ctl.status.as_str() } else { "No map" }).color(style::muted())).center(Length::Fill).into(),
         };
-        let top = row![
-            dims,
-            iced::widget::space::horizontal(),
-            crate::mapdata::controls(PrunerMsg::MapUi),
-            button(text("Fit").size(12)).on_press(PrunerMsg::FitView).style(style::button_style(Btn::Ghost))
+        let nav = container(self.nav()).padding([6, 8]).width(Length::Fill).style(style::topbar());
+        let mut over_map = column![nav, viewer].width(Length::Fill);
+        if self.render_open {
+            let mut row2 = row![text("Sun direction").size(12).color(style::muted())].spacing(6);
+            if !matches!(self.look.style.style, omt_render::style::MapStyle::Heightmap) {
+                row2 = row2.push(slider(0.0..=359.0, self.look.style.azimuth, |v| PrunerMsg::Look(crate::maplook::LookMsg::Azimuth(v))).step(5.0f32).width(110));
+            }
+            over_map = over_map.push(
+                container(row![crate::mapdata::controls(PrunerMsg::MapUi), space::horizontal(), row2].spacing(12).padding([4, 8]).align_y(iced::Alignment::Center))
+                    .padding([0, 8])
+                    .width(Length::Fill)
+                    .style(style::panel()),
+            );
+        }
+        // Same anatomy as the Map Viewer: tool rail | nav + map | panel.
+        row![self.tool_rail(), over_map, container(sidebar).height(Length::Fill).style(style::rail())]
+            .height(Length::Fill)
+            .into()
+    }
+
+    /// The map's container nav (same as the Map Viewer's): dimension, map
+    /// style and ruler on the left, the rendering disclosure on the right.
+    /// Overlays, zoom and fit live on the tool rail.
+    fn nav(&self) -> Element<'_, PrunerMsg> {
+        let dims = pick_list(Dimension::ALL.map(|d| DimChoice(d.id())), Some(DimChoice(self.ctl.dim)), |d: DimChoice| PrunerMsg::Dim(d.0)).text_size(12).width(112);
+        let styles = pick_list(MapStyle::ALL.to_vec(), Some(self.look.style.style), |s| PrunerMsg::Look(crate::maplook::LookMsg::Style(s))).text_size(12).width(136);
+        let rulers = pick_list(crate::mapview_overlay::Ruler::ALL.to_vec(), Some(self.look.ruler), |r| PrunerMsg::Look(crate::maplook::LookMsg::Ruler(r))).text_size(12).width(120);
+        let open = self.render_open;
+        let render = row![
+            crate::assets::glyph(omt_art::Glyph::Sun, if open { style::fg() } else { style::muted() }, 14.0),
+            text("Rendering").size(12),
+            crate::assets::glyph(if open { omt_art::Glyph::ChevronDown } else { omt_art::Glyph::ChevronRight }, style::muted(), 10.0),
         ]
-            .spacing(6)
-            .padding([4, 8])
-            .align_y(iced::Alignment::Center);
-        let look = container(self.look.toolbar(PrunerMsg::Look)).padding([2, 8]);
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
         row![
-            container(sidebar).height(Length::Fill).style(style::panel()),
-            column![top, look, viewer].width(Length::Fill),
+            dims,
+            styles,
+            rulers,
+            iced::widget::space::horizontal(),
+            button(render).padding([6, 10]).on_press(PrunerMsg::ToggleRender).style(style::button_style(if open { Btn::ChipOn } else { Btn::Standard })),
         ]
-        .height(Length::Fill)
+        .spacing(8)
+        .align_y(iced::Alignment::Center)
         .into()
+    }
+
+    /// Photoshop-style tool rail docked left of the map — same anatomy as
+    /// the Map Viewer's (`maprail`): selection tools, then the shared map
+    /// overlays, with zoom/fit pinned at the bottom.
+    fn tool_rail(&self) -> Element<'_, PrunerMsg> {
+        use crate::maplook::{GridChoice, LookMsg};
+        use crate::maprail::{self, Side};
+        let mut top: Vec<Element<'_, PrunerMsg>> = Tool::ALL
+            .iter()
+            .map(|&t| maprail::tool(t.rail_glyph(), format!("{} — {}", t.name(), t.hint()), self.tool == t, Some(PrunerMsg::Tool(t)), Side::Left))
+            .collect();
+        top.push(maprail::tool(omt_art::Glyph::Clock, "Time: select chunks by InhabitedTime", self.time_open, Some(PrunerMsg::ToggleTime), Side::Left));
+        top.push(maprail::separator());
+        let look = &self.look;
+        let next_grid = match look.chunk_grid {
+            None => Some(true),
+            Some(true) => Some(false),
+            Some(false) => None,
+        };
+        top.extend(maprail::overlay_group(maprail::Overlays {
+            chunk_grid: look.chunk_grid,
+            region_grid: look.region_grid,
+            spawn: look.spawn,
+            spawn_available: self.ctl.dim == 0,
+            hud: look.hud,
+            shortcuts: false,
+            cycle_chunk_grid: PrunerMsg::Look(LookMsg::ChunkGrid(GridChoice(next_grid))),
+            toggle_region_grid: PrunerMsg::Look(LookMsg::RegionGrid(!look.region_grid)),
+            toggle_spawn: PrunerMsg::Look(LookMsg::Spawn(!look.spawn)),
+            toggle_hud: PrunerMsg::Look(LookMsg::Hud(!look.hud)),
+        }));
+        let bottom = maprail::nav_group(PrunerMsg::Zoom(2.0), PrunerMsg::Zoom(0.5), PrunerMsg::FitView, false);
+        maprail::strip(top, bottom)
+    }
+}
+
+/// A dimension value for the nav pick list (shows its name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DimChoice(u8);
+
+impl std::fmt::Display for DimChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(Dimension::from_id(self.0).map_or("?", Dimension::name))
     }
 }
 

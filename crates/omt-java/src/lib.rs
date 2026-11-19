@@ -1,5 +1,6 @@
 //! `omt-java` — Java Edition world storage for OmniMCTools.
 
+pub mod legacy_chunk;
 pub mod region;
 pub mod store;
 

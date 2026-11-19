@@ -44,6 +44,8 @@ pub struct Settings {
     pub map_smooth: bool,
     /// Map tiles rendered at once (0 = automatic).
     pub map_parallel: u8,
+    /// Render CPU threads (0 = all cores).
+    pub map_threads: u16,
     /// Map detail bias: +1/+2 sharper (slower), -1/-2 coarser (faster).
     pub map_detail_bias: i8,
     /// Color theme.
@@ -87,6 +89,7 @@ impl Default for Settings {
             map_disk_cache_mb: 1024,
             map_smooth: true,
             map_parallel: 0,
+            map_threads: 0,
             map_detail_bias: 0,
             theme: crate::style::ThemeKind::Deepslate,
             rail_collapsed: false,
@@ -158,6 +161,7 @@ impl Settings {
             crate::mapdata::MapUiMsg::Quality(q) => self.map_quality = q,
             crate::mapdata::MapUiMsg::Detail(d) => self.map_detail_bias = d.clamp(-2, 2),
             crate::mapdata::MapUiMsg::Smooth(v) => self.map_smooth = v,
+            crate::mapdata::MapUiMsg::Threads(n) => self.map_threads = n,
         }
     }
 
@@ -170,6 +174,7 @@ impl Settings {
             disk_cache_mb: self.map_disk_cache_mb,
             smooth: self.map_smooth,
             parallel: self.map_parallel,
+            threads: self.map_threads,
             detail_bias: self.map_detail_bias,
         }
     }

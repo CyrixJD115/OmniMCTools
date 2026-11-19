@@ -184,7 +184,11 @@ pub fn entity_kind(id: &str) -> EntityKind {
 }
 
 fn marker_from(tag: &Tag, id_key: &str) -> Option<EntityMarker> {
-    let id = tag.get(id_key).and_then(Tag::as_str)?.to_string();
+    // Old Bedrock entities store a numeric `id` (type in the low byte).
+    let id = match tag.get(id_key).or_else(|| tag.get("id"))? {
+        Tag::String(s) => s.clone(),
+        other => format!("entity #{}", other.as_i64()? & 0xff),
+    };
     let (x, z) = list_f64(tag.get("Pos"))?;
     Some(EntityMarker { id, x, z })
 }
@@ -195,11 +199,49 @@ pub fn bedrock_entities(world: &omt_bedrock::BedrockWorld, dim: u8, chunks: &[(i
     let Ok(digps) = world.get_exact(&digp_keys) else { return Vec::new() };
     let actor_keys: Vec<Vec<u8>> = digps.iter().flatten().flat_map(|d| d.as_chunks::<8>().0.iter().map(|id| omt_bedrock::keys::actor_key(*id)).collect::<Vec<_>>()).collect();
     let Ok(actors) = world.get_exact(&actor_keys) else { return Vec::new() };
-    actors.iter().flatten().filter_map(|raw| omt_bedrock::store::parse_actor_nbt(raw).ok()).filter_map(|n| marker_from(&n.tag, "identifier")).collect()
+    let mut out: Vec<EntityMarker> = actors.iter().flatten().filter_map(|raw| omt_bedrock::store::parse_actor_nbt(raw).ok()).filter_map(|n| marker_from(&n.tag, "identifier")).collect();
+    // Older chunks keep their entities in the chunk (0x32 records).
+    let legacy: Vec<Vec<u8>> = chunks.iter().map(|&(x, z)| omt_bedrock::keys::chunk_record(x, z, dim, omt_bedrock::keys::tag::LEGACY_ENTITIES)).collect();
+    if let Ok(vals) = world.get_exact(&legacy) {
+        for raw in vals.iter().flatten() {
+            out.extend(omt_bedrock::store::parse_nbt_sequence(raw).iter().filter_map(|t| marker_from(t, "identifier")));
+        }
+    }
+    out
 }
 
-/// Entities of the given chunks (Java: `entities/r.x.z.mca`).
+/// Entities of the given chunks (Java: `entities/r.x.z.mca`; chunks
+/// saved before 1.17 keep them in the chunk's `Level.Entities`).
 pub fn java_entities(world: &omt_java::JavaWorld, dim: u8, chunks: &[(i32, i32)]) -> Vec<EntityMarker> {
+    let mut out = java_entity_regions(world, dim, chunks);
+    // In-chunk entities only exist in worlds saved before 1.18 (or without
+    // an `entities/` folder): skip the extra NBT reads otherwise.
+    let dv = world.level_dat.tag.get("Data").and_then(|d| d.get("DataVersion")).and_then(Tag::as_i64).unwrap_or(0);
+    if dv >= 2860 && world.entity_dimension_dir(dim).is_some() {
+        return out;
+    }
+    let mut by_region: std::collections::BTreeMap<(i32, i32), Vec<(i32, i32)>> = Default::default();
+    for &(x, z) in chunks {
+        by_region.entry((x.div_euclid(32), z.div_euclid(32))).or_default().push((x, z));
+    }
+    for ((rx, rz), cs) in by_region {
+        let path = world.region_path(dim, rx, rz);
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Ok(region) = omt_java::RegionFile::from_bytes(&path, &bytes) else { continue };
+        for (x, z) in cs {
+            if !region.contains(x, z) {
+                continue;
+            }
+            let Ok(n) = region.read_chunk(&bytes, x, z) else { continue };
+            for e in n.tag.get("Level").and_then(|l| l.get("Entities")).and_then(Tag::as_list).into_iter().flatten() {
+                out.extend(marker_from(e, "id"));
+            }
+        }
+    }
+    out
+}
+
+fn java_entity_regions(world: &omt_java::JavaWorld, dim: u8, chunks: &[(i32, i32)]) -> Vec<EntityMarker> {
     let Some(dir) = world.entity_dimension_dir(dim) else { return Vec::new() };
     let mut by_region: std::collections::BTreeMap<(i32, i32), Vec<(i32, i32)>> = Default::default();
     for &(x, z) in chunks {

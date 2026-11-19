@@ -22,11 +22,14 @@ pub struct RenderOptions {
     /// Underground mode: below the surface (or slicer), skip down through
     /// the first solid layer and draw the floor of the first cave beneath.
     pub cave: bool,
+    /// Block filter / stylesheet / water rules id ([`crate::rules`]; 0 =
+    /// defaults).
+    pub rules: u64,
 }
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        Self { max_y: None, min_y: -64, biome_tint: true, water_shading: true, relief: true, cave: false }
+        Self { max_y: None, min_y: -64, biome_tint: true, water_shading: true, relief: true, cave: false, rules: 0 }
     }
 }
 
@@ -213,6 +216,8 @@ pub fn render_chunk(chunk: &Chunk, palette: &Palette, opts: &RenderOptions) -> C
         return ChunkRender { x: chunk.x, z: chunk.z, rgba, heights, surface, biome: [NO_SURFACE; 256], names };
     };
     let start = opts.max_y.map_or(top, |m| m.min(top));
+    let rules = crate::rules::get(opts.rules);
+    let water_vis = rules.water_visibility as u32;
     // Per-slice color caches (palette index → color), built lazily, plus
     // per-slice palette index → chunk-local surface name id.
     let mut caches: std::collections::HashMap<i8, Vec<BlockColor>> = std::collections::HashMap::new();
@@ -242,7 +247,7 @@ pub fn render_chunk(chunk: &Chunk, palette: &Palette, opts: &RenderOptions) -> C
                 };
                 let cache = caches
                     .entry(sy)
-                    .or_insert_with(|| slice.palette.iter().map(|b| palette.block(b)).collect());
+                    .or_insert_with(|| slice.palette.iter().map(|b| rules.block(palette, b)).collect());
                 let idx = (y.rem_euclid(16) as usize) * 256 + lz * 16 + lx;
                 let pi = *slice.indices.get(idx).unwrap_or(&0) as usize;
                 let color = cache.get(pi).copied().unwrap_or(BlockColor::CLEAR);
@@ -263,13 +268,20 @@ pub fn render_chunk(chunk: &Chunk, palette: &Palette, opts: &RenderOptions) -> C
                     } else {
                         let key = biome_key(chunk, lx, y, lz);
                         let biome = *biomes.entry(key).or_insert_with(|| biome_colors(chunk, palette, key));
-                        tinted(color, biome, opts.biome_tint)
+                        tinted(color, biome, opts.biome_tint && rules.tinted(color.tint))
                     };
                     let mut a = c[3] as f32 / 255.0;
                     if is_water {
                         // Surface water half-covers; each deeper block adds
                         // a little — shallows stay readable, depths darken.
-                        a = if water_seen == 0 { 0.5 } else if opts.water_shading { 0.12 } else { 0.0 };
+                        // Visibility 0 = flat, opaque water.
+                        a = if water_seen == 0 {
+                            if water_vis == 0 { 1.0 } else { 0.5 }
+                        } else if opts.water_shading {
+                            0.12
+                        } else {
+                            0.0
+                        };
                         water_seen += 1;
                     }
                     if heights[lz * 16 + lx] == i32::MIN && (a > 0.3 || is_water) {
@@ -287,7 +299,7 @@ pub fn render_chunk(chunk: &Chunk, palette: &Palette, opts: &RenderOptions) -> C
                         acc[i] += w * c[i] as f32;
                     }
                     acc_a += w;
-                    if water_seen > 24 {
+                    if water_seen > water_vis {
                         break;
                     }
                 }

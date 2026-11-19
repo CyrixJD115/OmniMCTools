@@ -1,6 +1,7 @@
 //! `omt-bedrock` — Bedrock world storage for OmniMCTools.
 
 pub mod index;
+pub mod legacy;
 pub mod keys;
 pub mod store;
 pub mod subchunk;

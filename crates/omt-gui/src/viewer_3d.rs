@@ -22,12 +22,30 @@ use crate::viewer_3d_input::Key3;
 /// Copy of the loaded tiles' heights + styled colors (thread-safe).
 pub struct Snapshot {
     tiles: HashMap<TileKey, (u32, Vec<i16>, Vec<u8>)>,
+    /// Interned surface block names (per finest tile, one table).
+    names: Vec<String>,
+    surfaces: HashMap<TileKey, Vec<u16>>,
 }
 
 impl Snapshot {
     pub fn of(map: &MapData) -> Self {
-        let tiles = map.tiles.iter().filter_map(|(k, t)| t.field().map(|(h, c)| (*k, (t.px, h, c)))).filter(|(_, (px, _, _))| *px > 0).collect();
-        Self { tiles }
+        let mut names: Vec<String> = Vec::new();
+        let mut intern: HashMap<String, u16> = HashMap::new();
+        let mut id = |n: &str| -> u16 {
+            *intern.entry(n.to_string()).or_insert_with(|| {
+                names.push(n.to_string());
+                (names.len() - 1) as u16
+            })
+        };
+        let mut tiles = HashMap::new();
+        let mut surfaces = HashMap::new();
+        for (k, t, h, c) in map.tiles.iter().filter_map(|(k, t)| t.field().map(|(h, c)| (*k, t, h, c))).filter(|(_, t, _, _)| t.px > 0) {
+            tiles.insert(k, (t.px, h, c));
+            if !t.surface.is_empty() && !t.names.is_empty() {
+                surfaces.insert(k, t.surface.iter().map(|&s| id(t.names.get(s as usize).map(String::as_str).unwrap_or(""))).collect());
+            }
+        }
+        Self { tiles, names, surfaces }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -36,6 +54,12 @@ impl Snapshot {
 
     /// Height + color at a block from the finest loaded tile.
     pub fn sample(&self, x: f64, z: f64) -> Option<(f32, [u8; 3])> {
+        self.sample_full(x, z).map(|(h, c, _)| (h, c))
+    }
+
+    /// [`Sample::sample`](Self::sample) plus the surface block's name, when
+    /// the finest tile carrying it is loaded (textured iso).
+    pub fn sample_full(&self, x: f64, z: f64) -> Option<(f32, [u8; 3], Option<&str>)> {
         let (bx, bz) = (x.floor() as i64, z.floor() as i64);
         let (cx, cz) = (bx.div_euclid(16) as i32, bz.div_euclid(16) as i32);
         for level in 0..=omt_render::MAX_LEVEL {
@@ -53,7 +77,8 @@ impl Snapshot {
             if hh == i16::MIN || c.get(i * 4 + 3).copied().unwrap_or(0) == 0 {
                 return None;
             }
-            return Some((hh as f32, [c[i * 4], c[i * 4 + 1], c[i * 4 + 2]]));
+            let name = self.surfaces.get(&key).and_then(|s| s.get(i).copied()).and_then(|id| self.names.get(id as usize)).map(String::as_str);
+            return Some((hh as f32, [c[i * 4], c[i * 4 + 1], c[i * 4 + 2]], name));
         }
         None
     }
@@ -113,6 +138,20 @@ pub struct View3 {
     pub locked: bool,
     /// Last movement tick.
     pub last_tick: Option<std::time::Instant>,
+    /// Isometric mode: view angle (0..3); `None` = perspective 3D.
+    pub iso: Option<u8>,
+    pub iso_cam: omt_render::iso::IsoCam,
+    /// Iso "Textured" detail (block looks instead of flat map colors).
+    pub iso_textured: bool,
+    /// Iso detail "3D blocks": the GPU textured block mesh drawn with an
+    /// isometric (orthographic) camera.
+    pub iso_blocks: bool,
+    /// Centre the iso block grid was built around.
+    pub iso_bcenter: (f64, f64),
+    /// Screen-space drag offset accumulated since the shown iso frame was
+    /// rendered: during a pan the frame is drawn shifted by this, and the
+    /// next full render (on release / big offset) resets it.
+    pub iso_pan: (f32, f32),
 }
 
 /// A GPU block mesh (messages need `Debug`).
@@ -175,6 +214,8 @@ pub enum Ev3 {
     Resize(Size),
     /// A click without dragging, as fractions of the canvas (0..1).
     Click { fx: f32, fy: f32 },
+    /// A drag ended (button released).
+    End,
 }
 
 pub struct Canvas3<'a, M> {
@@ -185,6 +226,11 @@ pub struct Canvas3<'a, M> {
     pub mouse_look: bool,
     /// The mouse is captured.
     pub locked: bool,
+    /// Isometric mode (drag pans, wheel zooms).
+    pub iso: bool,
+    /// Iso drag offset: the shown frame is drawn shifted by this while a
+    /// fresh render is pending (keeps panning glued to the cursor).
+    pub iso_pan: (f32, f32),
     pub status: String,
     pub on_event: Box<dyn Fn(Ev3) -> M + 'a>,
 }
@@ -287,8 +333,10 @@ impl<M> canvas::Program<M> for Canvas3<'_, M> {
             }
             iced::Event::Mouse(mouse::Event::ButtonReleased(_)) => {
                 st.drag = None;
-                let (p, moved) = st.press.take()?;
-                (!moved).then(|| canvas::Action::publish((self.on_event)(Ev3::Click { fx: p.x / bounds.width.max(1.0), fy: p.y / bounds.height.max(1.0) })))
+                let click = st.press.take().and_then(|(p, moved)| {
+                    (!moved).then_some(canvas::Action::publish((self.on_event)(Ev3::Click { fx: p.x / bounds.width.max(1.0), fy: p.y / bounds.height.max(1.0) })))
+                });
+                Some(click.unwrap_or_else(|| canvas::Action::publish((self.on_event)(Ev3::End))))
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let (from, moving) = st.drag?;
@@ -317,10 +365,15 @@ impl<M> canvas::Program<M> for Canvas3<'_, M> {
         if let Some(h) = self.frame {
             let mut img = canvas::Image::new(h.clone());
             img.filter_method = if self.crisp { iced::widget::image::FilterMethod::Nearest } else { iced::widget::image::FilterMethod::Linear };
-            f.draw_image(Rectangle::new(Point::ORIGIN, size), img);
+            // While an iso drag is in flight the shown frame is shifted by
+            // the accumulated drag (the pending render will catch up).
+            let at = if self.iso { Point::new(self.iso_pan.0, self.iso_pan.1) } else { Point::ORIGIN };
+            f.draw_image(Rectangle::new(at, size), img);
         }
         let keys = "W A S D move · Space / Shift up / down · Ctrl faster";
-        let hint = if self.locked {
+        let hint = if self.iso {
+            "Drag: pan · Wheel: zoom · view angle in Render settings".to_string()
+        } else if self.locked {
             format!("Mouse captured — move to look · {keys} · wheel: speed · Esc: release")
         } else if self.mouse_look {
             format!("Click to capture the mouse · {keys}")

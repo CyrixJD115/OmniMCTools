@@ -23,9 +23,12 @@ mod locator;
 mod mapconfig;
 mod mapdata;
 mod maplook;
+mod maprail;
 mod maptile;
 mod mapview;
 mod mapview_overlay;
+mod panelui;
+mod chunkread;
 mod nbt_session;
 mod pruner;
 mod rows;
@@ -37,13 +40,22 @@ mod sources;
 mod style;
 mod textures;
 mod viewer;
+mod viewer_ext;
+mod viewer_highlight;
+mod viewer_info;
+mod viewer_iso;
+mod viewer_inspect;
+mod viewer_presets;
+mod viewer_rules;
 mod viewer_3d;
 mod viewer_3d_ctl;
 mod viewer_3d_input;
 mod viewer_blocks;
 mod viewer_export;
 mod viewer_tex;
+mod viewer_types;
 mod viewer_view;
+mod viewer_web;
 mod world_edit;
 mod world_edit_3d;
 mod world_edit_view;
@@ -147,6 +159,8 @@ pub enum Message {
     HotkeyUndo,
     HotkeyRedo,
     HotkeySave,
+    /// Map Viewer keyboard navigation (arrows pan, +/− zoom, * reset, Ctrl+G).
+    ViewerKey(crate::viewer::ViewerKey),
 }
 
 enum Ui {
@@ -291,7 +305,7 @@ impl OmniMCTools {
         // Keep the Settings page draft in step with changes made elsewhere.
         self.settings_draft.favorites = self.settings.favorites.clone();
         self.settings_draft.bookmarks = self.settings.bookmarks.clone();
-        self.settings_draft.viewer = self.settings.viewer;
+        self.settings_draft.viewer = self.settings.viewer.clone();
         self.settings_draft.theme = self.settings.theme;
         self.settings_draft.rail_collapsed = self.settings.rail_collapsed;
         self.settings_draft.library_grid = self.settings.library_grid;
@@ -489,6 +503,14 @@ impl OmniMCTools {
                 }
             }
             Message::View(i, m) => {
+                // "Open in <tool>" from the viewer's Tools menu becomes a
+                // regular world open (before the viewer borrows anything).
+                if let ViewerMsg::OpenIn(app) = &m {
+                    if let Some(origin) = self.sessions.get(i).and_then(|t| t.sess.as_ref()).map(|s| s.origin()) {
+                        return self.update(Message::OpenWorld(*app, origin));
+                    }
+                    return Task::none();
+                }
                 if let ViewerMsg::MapUi(u) = &m {
                     self.apply_map_ui(*u);
                 }
@@ -497,7 +519,7 @@ impl OmniMCTools {
                 let mut prefs = None;
                 if let Some(SessionTab { sess: Some(sess), ui: Ui::Viewer(ui), .. }) = self.sessions.get_mut(i) {
                     task = ui.update(sess, &mut self.settings.bookmarks, m).map(move |m| Message::View(i, m));
-                    prefs = Some(ui.prefs);
+                    prefs = Some(ui.prefs.clone());
                 }
                 if let Some(p) = prefs
                     && (p != self.settings.viewer || marks_before != self.settings.bookmarks.len())
@@ -537,6 +559,15 @@ impl OmniMCTools {
             }
             Message::CloseSession(i) => return self.close_session(i),
             Message::FocusSearch => return iced::widget::operation::focus(editor_view::search_id()),
+            Message::ViewerKey(k) => {
+                // Only the viewer session on screen reacts (uNmINeD-style
+                // map navigation: arrows pan, +/− zoom, * resets, Ctrl+G).
+                if let Page::Session(i) = self.screen
+                    && matches!(self.sessions.get(i).map(|t| &t.ui), Some(Ui::Viewer(_)))
+                {
+                    return self.update(Message::View(i, crate::viewer::ViewerMsg::Key(k)));
+                }
+            }
             Message::HotkeyUndo | Message::HotkeyRedo | Message::HotkeySave => {
                 let em = match message {
                     Message::HotkeyUndo => EditorMsg::Undo,
@@ -610,7 +641,7 @@ impl OmniMCTools {
                 (Ui::Editor(Box::new(e)), t)
             }
             App::MapViewer => {
-                let mut v = ViewerState::new(&sess, self.settings.viewer);
+                let mut v = ViewerState::new(&sess, self.settings.viewer.clone());
                 let t = v.load(&sess).map(move |m| Message::View(i, m));
                 (Ui::Viewer(Box::new(v)), t)
             }

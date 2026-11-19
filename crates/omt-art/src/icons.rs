@@ -461,10 +461,40 @@ pub enum Glyph {
     Target,
     Export,
     Picture,
+    // Map-rail glyphs (art grids in `map_glyphs`).
+    ZoomIn,
+    ZoomOut,
+    Fit,
+    SelBox,
+    SelCircle,
+    SelPolygon,
+    SelSplit,
+    Clock,
+    ChunkGrid,
+    RegionGrid,
+    Spawn,
+    Player,
+    Bookmark,
+    Entity,
+    Slime,
+    Cave,
+    Slicer,
+    Texture,
+    Compass,
+    Sun,
+    Eye,
+    Contrast,
+    Layers,
+    Info,
+    Cube,
+    Leaf,
+    Palette,
+    Save,
+    Highlight,
 }
 
 impl Glyph {
-    pub const ALL: [Glyph; 15] = [
+    pub const ALL: [Glyph; 44] = [
         Glyph::Search,
         Glyph::Close,
         Glyph::Plus,
@@ -480,12 +510,51 @@ impl Glyph {
         Glyph::Target,
         Glyph::Export,
         Glyph::Picture,
+        Glyph::ZoomIn,
+        Glyph::ZoomOut,
+        Glyph::Fit,
+        Glyph::SelBox,
+        Glyph::SelCircle,
+        Glyph::SelPolygon,
+        Glyph::SelSplit,
+        Glyph::Clock,
+        Glyph::ChunkGrid,
+        Glyph::RegionGrid,
+        Glyph::Spawn,
+        Glyph::Player,
+        Glyph::Bookmark,
+        Glyph::Entity,
+        Glyph::Slime,
+        Glyph::Cave,
+        Glyph::Slicer,
+        Glyph::Texture,
+        Glyph::Compass,
+        Glyph::Sun,
+        Glyph::Eye,
+        Glyph::Contrast,
+        Glyph::Layers,
+        Glyph::Info,
+        Glyph::Cube,
+        Glyph::Leaf,
+        Glyph::Palette,
+        Glyph::Save,
+        Glyph::Highlight,
     ];
 }
 
 /// A 16×16 glyph in `color`.
 pub fn glyph(g: Glyph, color: Rgba) -> Image {
     let mut img = Image::new(16, 16);
+    if let Some(rows) = crate::map_glyphs::art(g) {
+        for (y, row) in rows.iter().enumerate() {
+            for (x, c) in row.chars().enumerate() {
+                if c == '#' {
+                    img.set(x as i32, y as i32, color);
+                }
+            }
+        }
+        return img;
+    }
     let mut px = |x: i32, y: i32| img.set(x, y, color);
     match g {
         Glyph::Search => {
@@ -665,6 +734,8 @@ pub fn glyph(g: Glyph, color: Rgba) -> Image {
                 px(13, y);
             }
         }
+        // Art-grid glyphs returned above.
+        _ => {}
     }
     img
 }

@@ -3,13 +3,10 @@
 //! region grids, rulers, scale bar + compass and the spawn pin — the
 //! uNmINeD-style viewing features that make sense while selecting chunks.
 
-use iced::widget::{pick_list, row, slider, text, toggler};
-use iced::{Alignment, Element};
 use omt_render::style::{MapStyle, StyleParams};
 use serde::{Deserialize, Serialize};
 
 use crate::mapview_overlay::Ruler;
-use crate::style;
 
 /// Remembered look of a map.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -84,28 +81,5 @@ impl MapLook {
             LookMsg::Spawn(v) => self.spawn = v,
         }
         false
-    }
-
-    /// Compact toolbar row.
-    pub fn toolbar<'a, M: Clone + 'a>(&self, on: impl Fn(LookMsg) -> M + Clone + 'a) -> Element<'a, M> {
-        fn o<T, M, F: Fn(LookMsg) -> M + Clone>(on: &F, f: fn(T) -> LookMsg) -> impl Fn(T) -> M + use<T, M, F> {
-            let on = on.clone();
-            move |v| on(f(v))
-        }
-        let s = self.style;
-        let mut r = row![
-            pick_list(MapStyle::ALL.to_vec(), Some(s.style), o(&on, LookMsg::Style)).text_size(12).width(120),
-            pick_list(GridChoice::ALL.to_vec(), Some(GridChoice(self.chunk_grid)), o(&on, LookMsg::ChunkGrid)).text_size(12).width(112),
-            pick_list(Ruler::ALL.to_vec(), Some(self.ruler), o(&on, LookMsg::Ruler)).text_size(12).width(132),
-            toggler(self.region_grid).label("Regions").size(14).text_size(12).on_toggle(o(&on, LookMsg::RegionGrid)),
-            toggler(self.hud).label("Scale").size(14).text_size(12).on_toggle(o(&on, LookMsg::Hud)),
-            toggler(self.spawn).label("Spawn").size(14).text_size(12).on_toggle(o(&on, LookMsg::Spawn)),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
-        if !matches!(s.style, MapStyle::Heightmap) {
-            r = r.push(text("Sun").size(12).color(style::muted())).push(slider(0.0..=359.0, s.azimuth, o(&on, LookMsg::Azimuth)).step(5.0f32).width(110));
-        }
-        r.into()
     }
 }
