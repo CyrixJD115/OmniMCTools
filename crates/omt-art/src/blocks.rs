@@ -56,11 +56,20 @@ fn ramp(m: Material) -> [Rgba; 4] {
     }
 }
 
-/// Clustered noise index 0..4 (2×2 blobs + per-pixel jitter).
+/// Clustered noise index 0..4 (soft 4-px patches + edge jitter).
 fn blob(seed: u64, x: i32, y: i32) -> usize {
-    let coarse = hash2(seed, x / 2 + (y % 3), y / 2);
+    // Patches, not salt: a coarse value noise (bilinear over 4-px cells,
+    // wrapping so the texture tiles) dominates; fine noise only breaks the
+    // patch edges.
+    let cell = |cx: i32, cy: i32| hash2(seed, cx.rem_euclid(4), cy.rem_euclid(4));
+    let (fx, fy) = ((x as f32 + 0.5) / 4.0, (y as f32 + 0.5) / 4.0);
+    let (cx, cy) = (fx.floor() as i32, fy.floor() as i32);
+    let (tx, ty) = (fx - cx as f32, fy - cy as f32);
+    let top = cell(cx, cy) * (1.0 - tx) + cell(cx + 1, cy) * tx;
+    let bot = cell(cx, cy + 1) * (1.0 - tx) + cell(cx + 1, cy + 1) * tx;
+    let coarse = top * (1.0 - ty) + bot * ty;
     let fine = hash2(seed ^ 0xabcdef, x, y);
-    ((coarse * 0.65 + fine * 0.35) * 4.0).clamp(0.0, 3.999) as usize
+    ((coarse * 0.75 + fine * 0.25) * 4.0 - 0.3).clamp(0.0, 3.999) as usize
 }
 
 /// A 16×16 texture for a material.
@@ -111,14 +120,47 @@ pub fn texture(m: Material) -> Image {
                         c = [hex(0x2a9fb0), hex(0x45d0dd), hex(0x8ff0f0), hex(0xd0ffff)][blob(seed + 5, x, y)];
                     }
                 }
-                GoldBlock | Copper | Amethyst | Redstone => {
-                    // Beveled metal/crystal block: light top-left, dark bottom-right.
-                    if x == 0 || y == 0 {
-                        c = r[3];
+                GoldBlock | Copper | Redstone => {
+                    // Metal block: bevelled rim, brushed body, a diagonal
+                    // glint across the upper left.
+                    c = if x == 0 || y == 0 {
+                        r[3]
                     } else if x == 15 || y == 15 {
-                        c = r[0];
+                        r[0]
+                    } else if x == 1 || y == 1 {
+                        mix(r[2], r[3], 0.5)
+                    } else if x == 14 || y == 14 {
+                        mix(r[0], r[1], 0.5)
+                    } else if (x + y == 9 || x + y == 10) && x < 8 {
+                        r[3]
                     } else {
-                        c = r[1 + (blob(seed, x, y) > 1) as usize];
+                        r[1 + ((hash2(seed, x / 4, y) > 0.55) as usize)]
+                    };
+                }
+                Amethyst => {
+                    // Crystal facets: diagonal bands with bright edges.
+                    let band = (x + 2 * y + (hash2(seed, (x + 2 * y) / 5, 0) * 3.0) as i32).rem_euclid(7);
+                    c = match band {
+                        0 => r[3],
+                        1 | 2 => r[2],
+                        3 | 4 => r[1],
+                        _ => r[0],
+                    };
+                }
+                Deepslate => {
+                    // Horizontal strata with offset seams.
+                    let row = y / 3;
+                    let seam = y % 3 == 2 && (x + row * 5).rem_euclid(9) != 0;
+                    c = if seam { shade(r[0], 0.85) } else { r[(blob(seed, x, row * 3) + (row % 2) as usize).min(3)] };
+                }
+                Netherrack => {
+                    // Dark veins between lumpy patches.
+                    let v = hash2(seed, (x + y / 3) / 3, y / 2);
+                    c = if v > 0.82 { shade(r[0], 0.7) } else { r[blob(seed, x, y)] };
+                }
+                EndStone => {
+                    if hash2(seed ^ 0x55, x, y) > 0.9 {
+                        c = shade(r[0], 0.85);
                     }
                 }
                 Glass => {
@@ -209,7 +251,8 @@ pub fn iso_block(faces: &BlockFaces, s: u32) -> Image {
                 let fy = (y - top_edge) / sf;
                 if (0.0..1.0).contains(&fx) && (0.0..1.0).contains(&fy) {
                     let c = faces.left.get((fx * faces.left.w as f32) as i32, (fy * faces.left.h as f32) as i32);
-                    img.set(px, py, shade(c, 0.62));
+                    // Side faces darken a little toward the ground.
+                    img.set(px, py, shade(c, 0.66 - 0.08 * fy));
                 }
             } else {
                 let fx = x / sf;
@@ -217,7 +260,7 @@ pub fn iso_block(faces: &BlockFaces, s: u32) -> Image {
                 let fy = (y - top_edge) / sf;
                 if (0.0..1.0).contains(&fx) && (0.0..1.0).contains(&fy) {
                     let c = faces.right.get((fx * faces.right.w as f32) as i32, (fy * faces.right.h as f32) as i32);
-                    img.set(px, py, shade(c, 0.8));
+                    img.set(px, py, shade(c, 0.84 - 0.08 * fy));
                 }
             }
         }

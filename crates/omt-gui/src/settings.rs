@@ -64,10 +64,17 @@ pub struct Settings {
     pub viewer: crate::viewer::ViewerPrefs,
     /// Block textures source (installed game / download / off).
     pub texture_pack: crate::textures::TexChoice,
+    /// Add-on resource packs over the base textures, top first.
+    pub addons: Vec<crate::textures::AddonPref>,
+    /// Apply the packs the open world carries.
+    pub world_packs: bool,
     /// Custom cover images per world origin (library cards).
     pub covers: Vec<(PathBuf, PathBuf)>,
     /// Pruner map look (style, grids, ruler, HUD).
     pub pruner_look: crate::maplook::MapLook,
+    /// Lua extensions at all (tool tabs, NBT actions, row notes). Off = none
+    /// load or run; the Extensions page and Settings carry the switch.
+    pub extensions: bool,
 }
 
 impl Default for Settings {
@@ -99,8 +106,11 @@ impl Default for Settings {
             bookmarks: Vec::new(),
             viewer: crate::viewer::ViewerPrefs::default(),
             texture_pack: crate::textures::TexChoice::Auto,
+            addons: Vec::new(),
+            world_packs: true,
             covers: Vec::new(),
             pruner_look: crate::maplook::MapLook::default(),
+            extensions: true,
         }
     }
 }

@@ -7,12 +7,16 @@
 //! a workspace copy (Save / Save As / Close); the Map Viewer opens worlds
 //! in place, read-only. This module owns state and routes messages.
 
+mod addons_view;
 mod appearance;
 mod assets;
 mod converter;
 mod dictionary;
 mod editor;
+mod editor_actions;
 mod editor_view;
+mod ext_tools;
+mod ext_ui;
 mod extensions;
 mod filter;
 mod handlers;
@@ -44,6 +48,7 @@ mod viewer_ext;
 mod viewer_highlight;
 mod viewer_info;
 mod viewer_iso;
+mod viewer_isotiles;
 mod viewer_inspect;
 mod viewer_presets;
 mod viewer_rules;
@@ -82,7 +87,7 @@ use settings_view::SettingsMsg;
 use viewer::{ViewerMsg, ViewerState};
 
 fn main() -> iced::Result {
-    iced::application(OmniMCTools::new, OmniMCTools::update, OmniMCTools::view)
+    iced::application(OmniMCTools::new, OmniMCTools::step, OmniMCTools::view)
         .title(OmniMCTools::title)
         .theme(|_s: &OmniMCTools| style::omnitheme())
         .scale_factor(|s: &OmniMCTools| s.settings.scale_factor)
@@ -117,6 +122,8 @@ pub enum Page {
     Extensions,
     Doc(usize),
     Session(usize),
+    /// An extension tool tab (by tool uid).
+    ExtTool(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +144,7 @@ pub enum Message {
     SessionOpened(App, PathBuf, Result<Slot<WorldSession>, String>),
     OpenSettings,
     Ext(ExtMsg),
+    ExtTool(ext_tools::ExtToolMsg),
     Settings(SettingsMsg),
     // Standalone NBT files
     PickFile,
@@ -186,6 +194,8 @@ struct OmniMCTools {
     settings_draft: Settings,
     /// App-wide Lua extension host state (see `omt-script`).
     ext: Arc<Manager>,
+    /// Extension tools: discovered + open tabs.
+    hub: ext_tools::ExtHub,
     ext_status: String,
     worlds: Vec<worlds::WorldEntry>,
     library: Library,
@@ -207,6 +217,7 @@ impl OmniMCTools {
         let mut app = Self {
             settings_draft: settings.clone(),
             ext: Arc::new(Manager::open(&ext_root)),
+            hub: Default::default(),
             ext_status: String::new(),
             settings,
             worlds: Vec::new(),
@@ -219,6 +230,7 @@ impl OmniMCTools {
             status: "ready — everything stays on this computer".into(),
             tex: appearance::TexState::default(),
         };
+        app.ext.set_master(app.settings.extensions);
         // `omt-gui [FILE…]` opens each path as a document tab;
         // `omt-gui --app map|nbt|pruner|converter WORLD` opens a world;
         // `omt-gui --page worlds|settings|extensions|map|…` opens a page.
@@ -271,7 +283,7 @@ impl OmniMCTools {
             }
         }
         let scan = app.rescan();
-        let tex = app.load_textures();
+        let tex = Task::batch([app.load_textures(), crate::addons_view::debug_import()]);
         let open = match launch {
             Some((kind, world)) => app.open_session(kind, world),
             None => Task::none(),
@@ -285,6 +297,7 @@ impl OmniMCTools {
             Page::Session(i) => self.sessions.get(i).map(|s| format!("{} — {}", s.title, s.app.name())),
             Page::Settings => Some("Settings".into()),
             Page::Extensions => Some("Extensions".into()),
+            Page::ExtTool(uid) => self.hub.tool(uid).map(|t| t.title.clone()),
             Page::Library => Some("Worlds".into()),
             Page::Tool(a) => Some(a.name().into()),
             Page::Home => None,
@@ -312,6 +325,8 @@ impl OmniMCTools {
         self.settings_draft.library_sort = self.settings.library_sort;
         self.settings_draft.recent = self.settings.recent.clone();
         self.settings_draft.texture_pack = self.settings.texture_pack.clone();
+        self.settings_draft.addons = self.settings.addons.clone();
+        self.settings_draft.world_packs = self.settings.world_packs;
         self.settings_draft.covers = self.settings.covers.clone();
         self.settings_draft.pruner_look = self.settings.pruner_look;
         if let Err(e) = self.settings.save() {
@@ -432,6 +447,7 @@ impl OmniMCTools {
             }
             Message::OpenSettings => return self.update(Message::Nav(Page::Settings)),
             Message::Ext(m) => return self.on_ext(m),
+            Message::ExtTool(m) => return self.on_ext_tool(m),
             Message::Settings(m) => return self.on_settings(m),
             Message::PickFile => {
                 return Task::perform(
@@ -502,6 +518,7 @@ impl OmniMCTools {
                     return ui.update(sess, base, m).map(move |m| Message::Conv(i, m));
                 }
             }
+            Message::View(_, viewer::ViewerMsg::Host(m)) => return self.update(*m),
             Message::View(i, m) => {
                 // "Open in <tool>" from the viewer's Tools menu becomes a
                 // regular world open (before the viewer borrows anything).
@@ -555,6 +572,9 @@ impl OmniMCTools {
                         Ok(m) => m,
                         Err(e) => format!("save failed: {e}"),
                     };
+                }
+                if let Some(origin) = self.sessions.get(i).and_then(|t| t.sess.as_ref()).map(|s| s.origin()) {
+                    return self.resume_tools(&origin);
                 }
             }
             Message::CloseSession(i) => return self.close_session(i),
@@ -654,6 +674,10 @@ impl OmniMCTools {
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![iced::event::listen_with(handlers::handle_hotkey)];
+        // Live progress of running extension callbacks.
+        if self.hub.busy() {
+            subs.push(iced::time::every(std::time::Duration::from_millis(150)).map(|_| Message::ExtTool(ext_tools::ExtToolMsg::Tick)));
+        }
         if self.tex.download.is_some() {
             subs.push(iced::time::every(std::time::Duration::from_millis(250)).map(|_| Message::Tex(appearance::TexMsg::Tick)));
         }
@@ -683,7 +707,8 @@ impl OmniMCTools {
             .into(),
             Page::Tool(app) => home::tool_page(app, &self.library, &self.worlds, &self.settings, self.scanning, self.opening),
             Page::Settings => settings_view::view(&self.settings_draft, self.settings_draft != self.settings, self.appearance()),
-            Page::Extensions => extensions::view(&self.ext, &self.ext_status),
+            Page::Extensions => extensions::view(&self.ext, self.settings.extensions, &self.ext_status, &self.hub),
+            Page::ExtTool(uid) => self.ext_tool_page(uid),
             Page::Doc(i) => match self.docs.get(i) {
                 Some(tab) => container(editor_view::view(tab, std::rc::Rc::new(move |m| Message::Doc(i, m)))).padding(8).into(),
                 None => space::vertical().into(),

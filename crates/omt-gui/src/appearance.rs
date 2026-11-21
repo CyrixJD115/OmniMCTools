@@ -25,6 +25,7 @@ pub enum TexMsg {
     Cancel,
     Tick,
     Downloaded(Result<String, String>),
+    Addon(crate::addons_view::AddonMsg),
 }
 
 /// Texture-panel state owned by the app.
@@ -33,15 +34,23 @@ pub struct TexState {
     pub found: Vec<Found>,
     pub status: String,
     pub download: Option<Arc<Progress>>,
+    /// Add-on packs available (imported, game, open world).
+    pub addons: Vec<omt_texpack::Addon>,
+    /// The open world whose packs apply, and whether it has any.
+    pub world: Option<std::path::PathBuf>,
+    pub world_has_packs: bool,
+    /// Texture generation the open views last saw.
+    pub seen_gen: u64,
 }
 
 impl OmniMCTools {
     /// Load the configured pack at startup (and after changes).
     pub(crate) fn load_textures(&mut self) -> Task<Message> {
-        let choice = self.settings.texture_pack.clone();
+        let spec = self.tex_spec();
         Task::batch([
             Task::perform(blocking(textures::found), |f| Message::Tex(TexMsg::Scanned(f))),
-            Task::perform(blocking(move || textures::load(&choice)), |s| Message::Tex(TexMsg::Loaded(s))),
+            self.scan_addons(),
+            Task::perform(blocking(move || textures::load(&spec)), |s| Message::Tex(TexMsg::Loaded(s))),
         ])
     }
 
@@ -74,6 +83,7 @@ impl OmniMCTools {
                 }
             }
             TexMsg::Tick => {}
+            TexMsg::Addon(m) => return self.on_addon(m),
             TexMsg::Downloaded(r) => {
                 self.tex.download = None;
                 match r {
@@ -89,7 +99,7 @@ impl OmniMCTools {
     }
 
     pub(crate) fn appearance(&self) -> Element<'_, Message> {
-        column![text("Appearance").size(18), self.theme_picker(), self.textures_panel()].spacing(10).into()
+        column![text("Appearance").size(18), self.theme_picker(), self.textures_panel(), self.addons_panel()].spacing(10).into()
     }
 
     fn theme_picker(&self) -> Element<'_, Message> {

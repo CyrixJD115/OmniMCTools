@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "tools/*"]
+members = ["crates/*", "tools/*", "examples/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,6 +9,7 @@ rust-version = "1.88"
 license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
+libloading = "0.8"
 omt-nbt = { path = "crates/omt-nbt" }
 omt-world = { path = "crates/omt-world" }
 omt-versions = { path = "crates/omt-versions" }
@@ -22,6 +23,10 @@ omt-texpack = { path = "crates/omt-texpack" }
 omt-edit = { path = "crates/omt-edit" }
 omt-gpu = { path = "crates/omt-gpu" }
 omt-script = { path = "crates/omt-script" }
+omt-extensions = { path = "crates/omt-extensions" }
+omt-plugin-abi = { path = "crates/omt-plugin-abi" }
+omt-plugin = { path = "crates/omt-plugin" }
+omt-nativehost = { path = "crates/omt-nativehost" }
 omt-cli = { path = "crates/omt-cli" }
 omt-gui = { path = "crates/omt-gui" }
 

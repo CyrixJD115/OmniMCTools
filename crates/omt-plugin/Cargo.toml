@@ -1,0 +1,16 @@
+[package]
+name = "omt-plugin"
+description = "SDK for writing OmniMCTools native plugins (compiled Rust dynamic libraries): a Plugin builder, UI node builders, a Host handle for world/NBT/item calls, and the export_plugin! macro that emits the C ABI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-plugin-abi.workspace = true
+serde_json.workspace = true
+
+# This crate implements the FFI boundary, so it opts out of the workspace
+# `unsafe_code = "forbid"` lint and scopes unsafe to the glue functions.
+[lints.rust]
+unsafe_code = "allow"

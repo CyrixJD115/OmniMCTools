@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,9 @@ pub struct ExtensionRecord {
     pub id: String,
     pub dir: PathBuf,
     pub manifest: Manifest,
+    /// This folder is a compiled **native plugin** (a dynamic library),
+    /// not a Lua `main.lua` package.
+    pub native: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -69,6 +72,10 @@ pub struct Manager {
     root: PathBuf,
     records: RwLock<Vec<ExtensionRecord>>,
     disabled: RwLock<BTreeSet<String>>,
+    /// Master switch: when off, no extension runs at all (styles pass
+    /// short-circuits; tool discovery is the caller's to gate). The GUI
+    /// persists it in its settings and mirrors it here.
+    master: AtomicBool,
     rev: AtomicU64,
 }
 
@@ -91,6 +98,7 @@ impl Manager {
             root: root.into(),
             records: RwLock::new(Vec::new()),
             disabled: RwLock::new(BTreeSet::new()),
+            master: AtomicBool::new(true),
             rev: AtomicU64::new(1),
         };
         mgr.reload();
@@ -104,6 +112,20 @@ impl Manager {
     /// Monotonic revision; changes on any mutation or reload.
     pub fn revision(&self) -> u64 {
         self.rev.load(Ordering::Relaxed)
+    }
+
+    /// Master switch: `false` = no extension runs (styles pass returns
+    /// nothing) and the revision changes so discoverers re-run and see the
+    /// empty set. Persisted by the caller (GUI settings), not on disk here.
+    pub fn set_master(&self, on: bool) {
+        if self.master.swap(on, Ordering::Relaxed) != on {
+            self.bump();
+        }
+    }
+
+    /// Whether the master switch is on (default).
+    pub fn master(&self) -> bool {
+        self.master.load(Ordering::Relaxed)
     }
 
     fn bump(&self) {
@@ -120,7 +142,9 @@ impl Manager {
         if let Ok(entries) = std::fs::read_dir(&self.root) {
             for e in entries.flatten() {
                 let dir = e.path();
-                if !dir.join("main.lua").is_file() {
+                let lua = dir.join("main.lua").is_file();
+                let native = native_lib(&dir).is_some();
+                if !lua && !native {
                     continue;
                 }
                 let Some(id) = e.file_name().to_str().map(str::to_string) else { continue };
@@ -128,7 +152,7 @@ impl Manager {
                     .ok()
                     .and_then(|t| serde_json::from_str::<Manifest>(&t).ok())
                     .unwrap_or(Manifest { name: id.clone(), version: String::new(), author: String::new(), description: String::new() });
-                records.push(ExtensionRecord { id, dir, manifest });
+                records.push(ExtensionRecord { id, dir, manifest, native });
             }
         }
         // Saved order first (existing ids only), then any new folders.
@@ -295,7 +319,11 @@ impl Manager {
     }
 
     /// Runs all enabled extensions over one document (see [`crate::host`]).
+    /// Returns nothing when the master switch is off.
     pub fn run(&self, root_name: &str, root: &omt_nbt::Tag, ctx: &Context) -> NbtStyleRun {
+        if !self.master() {
+            return NbtStyleRun::default();
+        }
         let ids = self.enabled_ids();
         if ids.is_empty() {
             return NbtStyleRun::default();
@@ -346,6 +374,24 @@ fn ensure_safe_rel(rel: &str) -> Result<(), ManagerError> {
     } else {
         Err(ManagerError::UnsafeEntry(rel.to_string()))
     }
+}
+
+/// The dynamic library inside a native-plugin folder, if any
+/// (`*.so` / `*.dll` / `*.dylib`). Files starting with `.` are ignored.
+pub fn native_lib(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut libs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.'))
+                && p.extension().and_then(|x| x.to_str()).is_some_and(|x| matches!(x, "so" | "dll" | "dylib"))
+        })
+        .collect();
+    libs.sort();
+    libs.into_iter().next()
 }
 
 fn valid_id(id: &str) -> bool {
@@ -433,6 +479,24 @@ mod tests {
         mgr.install_files("b", &[("main.lua".into(), b"return {1}".to_vec())], None).unwrap_err(); // manifest.json required
         mgr.remove("b").unwrap();
         assert_eq!(mgr.enabled_ids(), vec!["a"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn master_switch_gates_runs_and_bumps_revision() {
+        let root = tmp_root("master");
+        let mgr = Manager::open(&root);
+        mgr.install_files("a", &[("main.lua".into(), b"return {}".to_vec())], Some(Manifest { name: "A".into(), version: String::new(), author: String::new(), description: String::new() })).unwrap();
+        assert!(mgr.master());
+        let before = mgr.revision();
+        mgr.set_master(false);
+        assert!(!mgr.master());
+        assert_eq!(mgr.revision(), before + 1, "toggle bumps revision so discoverers re-run");
+        // The styles pass short-circuits (an empty run, no Lua executed).
+        let ctx = crate::Context { file_type: 0, edition: crate::Edition::Java };
+        assert!(mgr.run("x.dat", &omt_nbt::Tag::Compound(Default::default()), &ctx).styles.is_empty());
+        mgr.set_master(true);
+        assert!(mgr.master());
         let _ = std::fs::remove_dir_all(&root);
     }
 

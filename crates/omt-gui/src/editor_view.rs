@@ -218,6 +218,9 @@ fn selection_panel<'a, M: Clone + 'a>(tab: &'a EditorTab, wrap: Wrap<'a, M>) -> 
                     .width(Length::Fill),
                 );
             }
+            if let Some(acts) = crate::editor_actions::action_buttons(tab, &r.path, &r.label, { let w = wrap.clone(); move |m| w(m) }) {
+                panel = panel.push(acts);
+            }
             if let Some(decoded) = r.value_snbt.as_deref().and_then(|v| dictionary::decode(&r.label, v)) {
                 panel = panel.push(
                     row![text("Meaning: ").size(12).color(style::muted()), text(decoded).size(12).color(style::accent())]

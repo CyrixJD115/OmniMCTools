@@ -5,6 +5,7 @@
 //! files are Mojang's (Minecraft EULA). Without a pack, OMT falls back to
 //! its procedural art (`omt-art`) and map colors.
 
+pub mod addons;
 pub mod brarchive;
 pub mod decode;
 pub mod download;
@@ -12,6 +13,7 @@ pub mod locate;
 pub mod pack;
 
 pub use locate::{Found, installed, vanilla_stack};
+pub use addons::{Addon, AddonKind, AddonSource};
 pub use pack::{Face, Pack};
 
 #[cfg(test)]

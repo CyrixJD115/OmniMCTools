@@ -6,7 +6,7 @@
 use mlua::{AnyUserData, Lua, MetaMethod, MultiValue, Table, UserData, UserDataMethods, Value};
 use omt_nbt::Tag;
 
-use super::host::{lua_err, Arena, LuaTag, Node};
+use super::host::{localize, lua_err, Arena, LuaTag, Node};
 use crate::RowStyle;
 
 /// Scalar/array tag → Lua value (containers → nil; use the child APIs).
@@ -128,7 +128,7 @@ impl UserData for LuaTag {
             Ok(LuaTag { idx, arena: this.arena.clone() })
         });
         methods.add_method("addChild", |_, this, other: AnyUserData| {
-            let other = other.borrow::<LuaTag>()?;
+            let other = localize(this, other.borrow::<LuaTag>()?.clone());
             let mut a = this.arena.borrow_mut();
             let (kind, dup, list_type_now) = {
                 let n = a.get(this.idx);
@@ -616,6 +616,7 @@ fn add_value(this: &LuaTag, name: Option<String>, value: Tag) -> Result<(), mlua
 /// After `addCompound`/`addList` created an empty child: pull the source
 /// tag's children into it.
 fn copy_children_into(this: &LuaTag, src: &LuaTag, mut attach: impl FnMut(&mut Arena, u32, u32)) -> Result<(), mlua::Error> {
+    let src = &localize(this, src.clone());
     let mut a = this.arena.borrow_mut();
     let added = *a.get(this.idx).children.last().ok_or_else(|| lua_err("internal: added node missing"))?;
     a.get_mut(added).children.clear();
@@ -643,6 +644,7 @@ fn set_subtree_target(this: &LuaTag, a: Value, b: Option<AnyUserData>, what: &st
 /// `setCompound`/`setList`: replace this (or the selected) node's subtree
 /// with a copy of `other`'s subtree.
 fn set_subtree(this: &LuaTag, sel: &Option<Value>, other: LuaTag) -> Result<(), mlua::Error> {
+    let other = localize(this, other);
     let t = resolve(this, sel)?;
     let mut a = this.arena.borrow_mut();
     if !matches!(a.get(other.idx).tag, Tag::Compound(_) | Tag::List(_)) {

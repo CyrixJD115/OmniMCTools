@@ -140,6 +140,11 @@ impl NbtSession {
         self.docs.iter().filter(|d| d.is_dirty()).count()
     }
 
+    /// The open documents (extension actions reach their tabs).
+    pub(crate) fn docs_mut(&mut self) -> &mut Vec<EditorTab> {
+        &mut self.docs
+    }
+
     fn push_doc(&mut self, mut tab: EditorTab) {
         if let Some(mgr) = self.ext.clone() {
             tab.set_extensions(mgr);

@@ -22,6 +22,7 @@
 //! `print` is routed into the run log instead of stdout.
 
 mod host;
+pub mod lua;
 mod manager;
 mod tag;
 

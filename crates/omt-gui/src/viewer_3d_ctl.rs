@@ -19,8 +19,9 @@ impl ViewerState {
             return Task::none();
         }
         self.v3.on = on;
+        self.v3.clear_frame();
         if !on {
-            self.v3.iso = None;
+            self.leave_iso();
             self.capture(false);
             self.v3.grid = None;
             self.v3.frame = None;
@@ -47,6 +48,9 @@ impl ViewerState {
     /// Point the 2D tile engine at the area around the 3D camera (so the
     /// tiles the grid needs get loaded) and rebuild the grid.
     pub(crate) fn recenter_3d(&mut self, store: Option<&Store>) -> Task<ViewerMsg> {
+        if self.v3.iso.is_some() {
+            return self.iso_pump(store);
+        }
         let span = 2.2 * self.v3.cam.far as f64;
         let px = self.ctl.view.width.min(self.ctl.view.height).max(1.0) as f64;
         self.ctl.camera = Camera { cx: self.v3.cam.x, cz: self.v3.cam.z, zoom: (px / span) as f32 };
@@ -55,7 +59,8 @@ impl ViewerState {
     }
 
     pub(crate) fn request_grid(&mut self) -> Task<ViewerMsg> {
-        if !self.v3.on {
+        // The isometric view streams its own tiles.
+        if !self.v3.on || self.v3.iso.is_some() {
             return Task::none();
         }
         if self.v3.building {
@@ -69,7 +74,7 @@ impl ViewerState {
         }
         self.v3.building = true;
         let (cx, cz) = (self.v3.cam.x, self.v3.cam.z);
-        let r = if self.v3.iso.is_some() { self.iso_radius() } else { self.v3.cam.far as f64 };
+        let r = self.v3.cam.far as f64;
         // Isometric frames are drawn on the CPU: no GPU mesh needed.
         let use_gpu = self.v3.gpu && self.v3.iso.is_none();
         Task::perform(
@@ -197,9 +202,11 @@ impl ViewerState {
         if self.v3.iso.is_some() {
             let Some(job) = self.iso_frame(sky.1) else { return Task::none() };
             self.v3.rendering = true;
-            return Task::perform(blocking(job), |h| h).then(|h: Handle| {
+            self.v3.iso_pan_sent = self.v3.iso_pan;
+            let g = self.v3.frame_gen;
+            return Task::perform(blocking(job), |h| h).then(move |h: Handle| {
                 let shown = h.clone();
-                iced::widget::image::allocate(h).map(move |a| ViewerMsg::Frame3(shown.clone(), a.ok()))
+                iced::widget::image::allocate(h).map(move |a| ViewerMsg::Frame3(g, shown.clone(), a.ok()))
             });
         }
         let gpu_frame = |f: GpuJob, w: u32, h: u32| -> Job {
@@ -229,9 +236,10 @@ impl ViewerState {
             Box::new(move || Handle::from_rgba(w, h, render(&grid, &cam, w as usize, h as usize, sky)))
         };
         self.v3.rendering = true;
-        Task::perform(blocking(job), |h| h).then(|h: Handle| {
+        let g = self.v3.frame_gen;
+        Task::perform(blocking(job), |h| h).then(move |h: Handle| {
             let shown = h.clone();
-            iced::widget::image::allocate(h).map(move |a| ViewerMsg::Frame3(shown.clone(), a.ok()))
+            iced::widget::image::allocate(h).map(move |a| ViewerMsg::Frame3(g, shown.clone(), a.ok()))
         })
     }
 
@@ -246,11 +254,20 @@ impl ViewerState {
         Task::batch(tasks)
     }
 
-    pub(crate) fn on_frame(&mut self, h: Handle, alloc: Option<iced::widget::image::Allocation>) -> Task<ViewerMsg> {
+    pub(crate) fn on_frame(&mut self, g: u64, h: Handle, alloc: Option<iced::widget::image::Allocation>) -> Task<ViewerMsg> {
         self.v3.rendering = false;
+        // Rendered for a view that has changed since (3D → Iso, another
+        // angle or detail): never show it — render the current view instead.
+        if g != self.v3.frame_gen || (self.v3.iso.is_some() && !self.v3.iso_blocks) {
+            self.v3.frame_dirty = false;
+            return self.request_frame();
+        }
         self.v3.frame = Some(h);
-        // The new frame matches the camera exactly: no drag offset anymore.
-        self.v3.iso_pan = (0.0, 0.0);
+        // The new frame matches the camera as it was when requested: only
+        // the drag since then still offsets it.
+        self.v3.iso_pan.0 -= self.v3.iso_pan_sent.0;
+        self.v3.iso_pan.1 -= self.v3.iso_pan_sent.1;
+        self.v3.iso_pan_sent = (0.0, 0.0);
         // Replacing the allocation releases the previous frame's upload.
         self.v3.alloc = alloc;
         if std::mem::take(&mut self.v3.frame_dirty) { self.request_frame() } else { Task::none() }

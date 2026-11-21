@@ -1,0 +1,17 @@
+[package]
+name = "omt-native-sample"
+description = "Example OmniMCTools native plugin: a container browser tool and a 'Fill stacks' NBT action, built as a cdylib with the omt-plugin SDK."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+omt-plugin.workspace = true
+
+[lints.rust]
+unsafe_code = "allow"

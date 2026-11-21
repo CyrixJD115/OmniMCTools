@@ -40,17 +40,33 @@ pub fn pixel<'a, M: 'a>(h: Handle, w: f32, hgt: f32) -> Element<'a, M> {
     image(h).filter_method(FilterMethod::Nearest).width(Length::Fixed(w)).height(Length::Fixed(hgt)).into()
 }
 
-/// A colored app icon at `size` px.
+/// Raster size for an icon shown at `size` logical px: twice the size
+/// (sharp on 1×–2× displays, filtered down smoothly), rounded up to a
+/// multiple of the 24-px icon grid when close to one (pixel-exact).
+fn icon_px(size: f32) -> u32 {
+    let px = (size * 2.0).round().max(8.0) as u32;
+    let snapped = px.div_ceil(24) * 24;
+    if snapped - px <= 4 { snapped } else { px }
+}
+
+/// Smoothly scaled image element (icons rasterized above display size).
+fn smooth<'a, M: 'a>(h: Handle, size: f32) -> Element<'a, M> {
+    image(h).filter_method(FilterMethod::Linear).width(Length::Fixed(size)).height(Length::Fixed(size)).into()
+}
+
+/// A colored app icon (Pixelarticons, tinted + shadowed) at `size` px.
 pub fn icon<'a, M: 'a>(i: Icon, size: f32) -> Element<'a, M> {
-    static C: Cache<Icon> = OnceLock::new();
-    pixel(cached(&C, i, || omt_art::icon(i)), size, size)
+    static C: Cache<(Icon, u32)> = OnceLock::new();
+    let px = icon_px(size);
+    smooth(cached(&C, (i, px), || omt_art::icon(i, px)), size)
 }
 
 /// A theme-tinted glyph at `size` px.
 pub fn glyph<'a, M: 'a>(g: Glyph, color: Color, size: f32) -> Element<'a, M> {
-    static C: Cache<(Glyph, [u8; 4])> = OnceLock::new();
+    static C: Cache<(Glyph, [u8; 4], u32)> = OnceLock::new();
     let c = rgba(color);
-    pixel(cached(&C, (g, c), || omt_art::glyph(g, c)), size, size)
+    let px = icon_px(size);
+    smooth(cached(&C, (g, c, px), || omt_art::glyph(g, c, px)), size)
 }
 
 /// The OmniMCTools wordmark, `height` px tall.
@@ -99,6 +115,37 @@ pub fn block_icon<'a, M: 'a>(name: &str, size: f32) -> Element<'a, M> {
             img.set(i, 0, [255, 255, 255, 60]);
             img.set(0, i, [255, 255, 255, 60]);
         }
+        img
+    };
+    pixel(cached(&C, (name.to_string(), crate::textures::generation()), make), size, size)
+}
+
+/// An item's inventory icon: its item texture from the active pack, else
+/// the block's face (block items), else a colored tile with its initial.
+pub fn item_icon<'a, M: 'a>(name: &str, size: f32) -> Element<'a, M> {
+    static C: Cache<(String, u64)> = OnceLock::new();
+    let make = || {
+        if let Some(pack) = crate::textures::current() {
+            if let Some(img) = pack.item(name) {
+                return (*img).clone();
+            }
+            if let Some(img) = pack.face(name, omt_texpack::Face::Up, true).or_else(|| pack.face(name, omt_texpack::Face::Side, false)) {
+                return (*img).clone();
+            }
+        }
+        let c = omt_render::Palette::embedded().color_of(name);
+        let known = c[3] > 0 && c[..3] != [0, 0, 0];
+        let base = if known { [c[0], c[1], c[2], 255] } else { [0x6b, 0x5b, 0x95, 255] };
+        let mut img = Image::filled(16, 16, base);
+        for i in 0..16 {
+            img.set(i, 0, [255, 255, 255, 70]);
+            img.set(0, i, [255, 255, 255, 70]);
+            img.set(i, 15, [0, 0, 0, 90]);
+            img.set(15, i, [0, 0, 0, 90]);
+        }
+        let initial: String = name.rsplit(':').next().unwrap_or(name).chars().next().map(|ch| ch.to_ascii_uppercase().to_string()).unwrap_or_default();
+        let glyph = omt_art::pixel_text(&initial, 1, [255, 255, 255, 235]);
+        img.draw(&glyph, (16 - glyph.w as i32) / 2, (16 - glyph.h as i32) / 2);
         img
     };
     pixel(cached(&C, (name.to_string(), crate::textures::generation()), make), size, size)

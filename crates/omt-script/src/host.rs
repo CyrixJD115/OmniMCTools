@@ -84,6 +84,25 @@ impl Arena {
         idx
     }
 
+    /// Copy a tag from elsewhere (another document) in as a detached
+    /// subtree with no row identity.
+    pub(crate) fn import(&mut self, name: String, tag: &Tag) -> u32 {
+        let idx = self.nodes.len() as u32;
+        self.nodes.push(Node { name, tag: tag.clone(), parent: None, row: -1, path: String::new(), style: RowStyle::default(), children: Vec::new() });
+        let kids: Vec<(String, Tag)> = match tag {
+            Tag::Compound(e) => e.clone(),
+            Tag::List(l) => l.iter().map(|v| (String::new(), v.clone())).collect(),
+            _ => Vec::new(),
+        };
+        for (r, (k, v)) in kids.into_iter().enumerate() {
+            let c = self.import(k, &v);
+            self.nodes[c as usize].parent = Some(idx);
+            self.nodes[c as usize].row = r as i64;
+            self.nodes[idx as usize].children.push(c);
+        }
+        idx
+    }
+
     pub(crate) fn get(&self, idx: u32) -> &Node {
         &self.nodes[idx as usize]
     }
@@ -181,6 +200,21 @@ impl Arena {
 pub(crate) struct LuaTag {
     pub(crate) idx: u32,
     pub(crate) arena: Rc<RefCell<Arena>>,
+}
+
+/// `other` as a handle into `this`'s arena: itself when they share one,
+/// otherwise a detached copy imported from its own document (tags from
+/// `omt.nbt.parse`, world reads, other files…).
+pub(crate) fn localize(this: &LuaTag, other: LuaTag) -> LuaTag {
+    if Rc::ptr_eq(&this.arena, &other.arena) {
+        return other;
+    }
+    let (name, tag) = {
+        let a = other.arena.borrow();
+        (a.get(other.idx).name.clone(), a.materialize(other.idx))
+    };
+    let idx = this.arena.borrow_mut().import(name, &tag);
+    LuaTag { idx, arena: this.arena.clone() }
 }
 
 pub(crate) fn lua_err(msg: impl Into<String>) -> mlua::Error {
@@ -332,7 +366,7 @@ fn walk(
     }
 }
 
-fn setup_globals(lua: &Lua, base: &Path, _ctx: &Context, logs: Rc<RefCell<Vec<(String, String)>>>) -> Result<(), mlua::Error> {
+pub(crate) fn setup_globals(lua: &Lua, base: &Path, _ctx: &Context, logs: Rc<RefCell<Vec<(String, String)>>>) -> Result<(), mlua::Error> {
     let g = lua.globals();
     g.set("BASE_PATH", base.display().to_string())?;
 
@@ -348,6 +382,9 @@ fn setup_globals(lua: &Lua, base: &Path, _ctx: &Context, logs: Rc<RefCell<Vec<(S
     let ext = lua.create_table()?;
     ext.set("NONE", 0i64)?;
     ext.set("NBT_EDITOR_STYLE", 1i64)?;
+    // Extension platform (`omt-extensions`): tool tabs and NBT actions.
+    ext.set("TOOL", 2i64)?;
+    ext.set("NBT_ACTION", 3i64)?;
     g.set("EXTENSION_TYPE", ext)?;
 
     let ft = lua.create_table()?;

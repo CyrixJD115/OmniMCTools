@@ -12,6 +12,10 @@ use crate::{Message, OmniMCTools, Page, mapdata, slot, style};
 
 impl OmniMCTools {
     pub(crate) fn save_session(&mut self, i: usize, dest: Option<PathBuf>) -> Task<Message> {
+        // Extension tools on this world let go of its store first.
+        if let Some(origin) = self.sessions.get(i).and_then(|t| t.sess.as_ref()).map(|s| s.origin()) {
+            self.suspend_tools(&origin);
+        }
         let Some(tab) = self.sessions.get_mut(i) else { return Task::none() };
         let Some(mut sess) = tab.sess.take() else { return Task::none() };
         tab.busy = Some(if dest.is_some() { "Exporting…".into() } else { "Saving…".into() });
@@ -51,6 +55,15 @@ impl OmniMCTools {
                 );
             }
             ExtMsg::ZipPicked(None) => return Task::none(),
+            ExtMsg::PickPlugin => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new().set_title("Install a native plugin").add_filter("Dynamic library", &["so", "dll", "dylib"]).pick_file().await.map(|h| h.path().to_path_buf())
+                    },
+                    |p| Message::Ext(ExtMsg::PluginPicked(p)),
+                );
+            }
+            ExtMsg::PluginPicked(None) => return Task::none(),
             _ => {}
         }
         let (status, _changed) = extensions::handle(&self.ext, &m);
@@ -82,6 +95,8 @@ impl OmniMCTools {
                 self.settings_draft.theme = self.settings.theme;
                 self.settings_draft.rail_collapsed = self.settings.rail_collapsed;
                 self.settings_draft.texture_pack = self.settings.texture_pack.clone();
+                self.settings_draft.addons = self.settings.addons.clone();
+                self.settings_draft.world_packs = self.settings.world_packs;
                 self.settings_draft.covers = self.settings.covers.clone();
                 self.settings_draft.pruner_look = self.settings.pruner_look;
                 self.settings_draft.library_grid = self.settings.library_grid;
@@ -89,6 +104,7 @@ impl OmniMCTools {
                 self.settings = self.settings_draft.clone();
                 style::set_theme(self.settings.theme);
                 mapdata::set_config(self.settings.map_config());
+                self.ext.set_master(self.settings.extensions);
                 self.status = match self.settings.save() {
                     Ok(()) => "settings saved".into(),
                     Err(e) => format!("could not save settings: {e}"),
@@ -120,6 +136,12 @@ impl OmniMCTools {
                 // Scale previews live.
                 if let SettingsMsg::Scale(v) = other {
                     self.settings.scale_factor = v;
+                }
+                // The extensions master switch applies immediately (the
+                // extensions page carries the same switch).
+                if let SettingsMsg::Extensions(v) = other {
+                    self.settings.extensions = v;
+                    self.ext.set_master(v);
                 }
             }
         }

@@ -29,12 +29,12 @@ fn main() -> std::io::Result<()> {
     save(&mark, &out.join("wordmark.png"))?;
     sheet_items.push(mark);
     for i in Icon::ALL {
-        let img = omt_art::icon(i).scaled(4);
+        let img = omt_art::icon(i, 96);
         save(&img, &out.join(format!("icon-{}.png", i.name())))?;
         sheet_items.push(img);
     }
     for g in Glyph::ALL {
-        sheet_items.push(omt_art::glyph(g, [230, 232, 236, 255]).scaled(4));
+        sheet_items.push(omt_art::glyph(g, [230, 232, 236, 255], 96));
     }
     for m in [Material::GrassTop, Material::Stone, Material::Deepslate, Material::DiamondOre, Material::Planks, Material::Netherrack, Material::EndStone, Material::Amethyst, Material::GoldBlock, Material::Copper] {
         sheet_items.push(omt_art::tool_block(m, 96));

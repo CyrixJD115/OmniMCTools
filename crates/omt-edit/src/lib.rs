@@ -15,6 +15,7 @@
 //! Always run against a workspace copy (the GUI does; Save writes back).
 
 pub mod bedrock;
+pub mod block_entities;
 pub mod biome;
 pub mod entities;
 pub mod java;

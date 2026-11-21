@@ -57,7 +57,12 @@ crates/omt-convert    Java <-> Bedrock conversion + loss ledger (M3/M4)
 crates/omt-cli        the `omt` binary
 crates/omt-render     map rendering: LOD tiles, styles (post-process), markers, voxel 3D
 crates/omt-prune      pruner engine
-crates/omt-script     Lua extensions
+crates/omt-script     Lua core: extension packages, tag API, NBT-editor style runs
+crates/omt-extensions extension platform: tool tabs + declarative UI, NBT actions, omt.* world/NBT/item APIs
+crates/omt-plugin-abi wire protocol for native plugins (serde types + C ABI)
+crates/omt-plugin    native-plugin author SDK (Plugin builder, ui, Host, export_plugin!)
+crates/omt-nativehost loads native-plugin dylibs, runs them as a ToolBackend
+examples/native-sample example native plugin (cdylib)
 crates/omt-art        procedural art (textures, icons, pixel font, landscapes)
 crates/omt-texpack    Bedrock resource packs (installed game .brarchive / opt-in download)
 crates/omt-edit       world editing (selections, fill/replace/paste, undo, structures, biomes, entities)

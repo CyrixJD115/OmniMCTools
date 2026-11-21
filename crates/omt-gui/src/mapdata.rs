@@ -93,8 +93,18 @@ impl MapData {
         }
     }
 
+    #[cfg(test)]
     pub fn insert(&mut self, key: TileKey, t: TileImage) {
-        let d = TileData::from_image(t, self.post.as_ref());
+        self.insert_data(key, TileData::from_image(t, self.post.as_ref()));
+    }
+
+    /// Insert a tile built (and styled) off the UI thread.
+    pub fn insert_data(&mut self, key: TileKey, mut d: TileData) {
+        if d.post != self.post
+            && let Some(p) = &self.post
+        {
+            d.restyle(p);
+        }
         self.bytes += d.bytes;
         if let Some(old) = self.tiles.insert(key, d) {
             self.bytes -= old.bytes;
@@ -271,7 +281,7 @@ impl std::fmt::Debug for Loaded {
 pub enum MapMsg {
     Loaded(u64, u8, Result<Loaded, String>),
     /// `Ok(None)` = cancelled (scrolled away / options changed).
-    Tile(u64, TileKey, Result<Option<Arc<TileImage>>, String>),
+    Tile(u64, TileKey, Result<Option<Arc<TileData>>, String>),
 }
 
 /// Owns one viewer's camera, tile pyramid and background builds.
@@ -304,6 +314,10 @@ pub struct MapController {
     view_known: bool,
     /// A debug camera script moved the camera (don't auto-fit over it).
     scripted: bool,
+    /// Load this block box `(x0, z0, x1, z1)` at this level instead of the
+    /// camera's view (the isometric view streams its own screen tiles and
+    /// needs the map data under them).
+    pub area: Option<((f64, f64, f64, f64), u8)>,
 }
 
 fn debug_cameras() -> std::collections::VecDeque<Camera> {
@@ -338,6 +352,7 @@ impl MapController {
             post: None,
             view_known: false,
             scripted: false,
+            area: None,
         }
     }
 
@@ -480,7 +495,7 @@ impl MapController {
                     Ok(Some(t)) => {
                         if let Some(map) = &mut self.map {
                             let t = Arc::try_unwrap(t).unwrap_or_else(|a| (*a).clone());
-                            map.insert(key, t);
+                            map.insert_data(key, t);
                         }
                     }
                     Ok(None) => {}
@@ -530,19 +545,20 @@ impl MapController {
         let (press, mem) = pressure();
         let budget_bytes = memory_budget(&cfg, press, mem);
         let reads = cfg.quality.budget(press);
-        let level = level_for(self.camera.zoom, cfg.detail_bias);
         let view = self.view;
         let cam = self.camera;
+        let ((bx0, bz0, bx1, bz1), level) = self.area.unwrap_or_else(|| (cam.visible_blocks(view), level_for(cam.zoom, cfg.detail_bias)));
         let g = self.generation();
+        // An explicit area already carries its own prefetch margin.
+        let m = i32::from(self.area.is_none());
         let Some(map) = &mut self.map else { return Task::none() };
         map.level = level;
-        let (bx0, bz0, bx1, bz1) = cam.visible_blocks(view);
         let (tx0, tz0, tx1, tz1) = tile_range(level, bx0, bz0, bx1, bz1);
         let center = ((bx0 + bx1) / 2.0, (bz0 + bz1) / 2.0);
         // On-screen tiles + a one-tile margin, minus tiles with no chunks.
         let mut want: Vec<TileKey> = Vec::new();
-        for tz in tz0 - 1..=tz1 + 1 {
-            for tx in tx0 - 1..=tx1 + 1 {
+        for tz in tz0 - m..=tz1 + m {
+            for tx in tx0 - m..=tx1 + m {
                 let k = TileKey::new(level, tx, tz);
                 let (x0, z0, x1, z1) = k.chunk_rect();
                 if map.source.chunks().any_in_rect(x0, z0, x1, z1) {
@@ -583,8 +599,13 @@ impl MapController {
             let cache = disk_cache(&cfg);
             let dim = self.dim;
             let threads = cfg.threads as usize;
+            let post = self.post;
             tasks.push(Task::perform(
-                blocking(move || omt_render::workers::install(threads, || build(src, dim, key, reads, opts, wanted, epoch, g, cache))),
+                blocking(move || {
+                    // Style on the worker too: the UI thread only inserts.
+                    let t = omt_render::workers::install(threads, || build(src, dim, key, reads, opts, wanted, epoch, g, cache))?;
+                    Ok(t.map(|t| Arc::new(TileData::from_image(Arc::try_unwrap(t).unwrap_or_else(|a| (*a).clone()), post.as_ref()))))
+                }),
                 move |r| MapMsg::Tile(g, key, r),
             ));
         }

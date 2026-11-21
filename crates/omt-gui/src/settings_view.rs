@@ -21,6 +21,8 @@ pub enum SettingsMsg {
     ConfirmPrune(bool),
     SkipPartial(bool),
     DebugLog(bool),
+    /// Master switch: no extension loads or runs when off.
+    Extensions(bool),
     MapQuality(crate::mapdata::MapQuality),
     MapMemory(u32),
     MapDiskCache(bool),
@@ -84,6 +86,7 @@ pub fn view<'a>(s: &'a Settings, dirty: bool, appearance: Element<'a, crate::Mes
             folders,
         ].spacing(6)).padding(10).style(style::card()),
         item("Friendly Names", "Show readable labels and descriptions next to raw NBT keys in the editor.", toggler(s.friendly_names).on_toggle(SettingsMsg::Friendly).into()),
+        item("Extensions", "Lua extensions: extra tool tabs, NBT-editor actions and row notes. Off = none load or run (manage them on the Extensions page).", toggler(s.extensions).on_toggle(SettingsMsg::Extensions).into()),
         item("Copy Worlds", "Worlds are always opened as a copy; nothing touches the original until you Save (Bedrock LevelDB compaction makes direct editing unsafe).", text("Always").size(12).color(style::muted()).into()),
         item("Debug Log", "Write a diagnostic log next to the settings file.", toggler(s.debug_log).on_toggle(SettingsMsg::DebugLog).into()),
     ]
@@ -197,6 +200,7 @@ pub fn apply(s: &mut Settings, msg: &SettingsMsg) -> bool {
         SettingsMsg::ConfirmPrune(v) => s.confirm_prune = *v,
         SettingsMsg::SkipPartial(v) => s.skip_partial_chunks = *v,
         SettingsMsg::DebugLog(v) => s.debug_log = *v,
+        SettingsMsg::Extensions(v) => s.extensions = *v,
         SettingsMsg::MapQuality(v) => s.map_quality = *v,
         SettingsMsg::MapMemory(v) => s.map_memory_mb = *v,
         SettingsMsg::MapDiskCache(v) => s.map_disk_cache = *v,

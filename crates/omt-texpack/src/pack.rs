@@ -29,11 +29,31 @@ pub enum Face {
 struct Layer {
     root: PathBuf,
     archives: Mutex<HashMap<PathBuf, Option<Arc<Archive>>>>,
+    /// Priority tier: the vanilla stack is tier 0, each add-on pack its own
+    /// tier above it. A higher tier that has *any* texture for a block face
+    /// wins; inside a tier, newer layers override per file.
+    tier: usize,
+    /// Texture file stem → pack-relative path without extension.
+    stems: HashMap<String, String>,
+    /// Item texture stems (indexed on first item lookup).
+    items: std::sync::OnceLock<HashMap<String, String>>,
 }
 
+/// Item texture folders (Bedrock, then Java 1.13+ and older).
+const ITEM_DIRS: [&str; 3] = ["textures/items", "assets/minecraft/textures/item", "assets/minecraft/textures/items"];
+
+/// Block texture folders of a Java resource pack (1.13+, then older).
+const JAVA_BLOCK_DIRS: [&str; 2] = ["assets/minecraft/textures/block", "assets/minecraft/textures/blocks"];
+
 impl Layer {
-    fn new(root: PathBuf) -> Self {
-        Self { root, archives: Mutex::new(HashMap::new()) }
+    fn new(root: PathBuf, tier: usize) -> Self {
+        let mut l = Self { root, archives: Mutex::new(HashMap::new()), tier, stems: HashMap::new(), items: std::sync::OnceLock::new() };
+        l.stems = l.scan_stems(&["textures/blocks", JAVA_BLOCK_DIRS[0], JAVA_BLOCK_DIRS[1]], "blocks");
+        l
+    }
+
+    fn item_stems(&self) -> &HashMap<String, String> {
+        self.items.get_or_init(|| self.scan_stems(&ITEM_DIRS, "items"))
     }
 
     fn archive(&self, dir: &str) -> Option<Arc<Archive>> {
@@ -51,14 +71,16 @@ impl Layer {
         self.archive(dir)?.get(name).map(<[u8]>::to_vec)
     }
 
-    /// Texture file stems under `textures/blocks` (loose and archived).
-    fn block_stems(&self, out: &mut HashMap<String, String>) {
+    /// Texture file stems under `loose` folders and the `__brarchive`
+    /// archives of `textures/<arch>` (loose and archived).
+    fn scan_stems(&self, loose: &[&str], arch_name: &str) -> HashMap<String, String> {
+        let mut out = HashMap::new();
         fn keep(name: &str) -> Option<&str> {
             let stem = name.strip_suffix(".png").or_else(|| name.strip_suffix(".tga"))?;
             (!stem.ends_with("_mers") && !stem.ends_with("_normal") && !stem.ends_with("_heightmap")).then_some(stem)
         }
-        let blocks = self.root.join("textures/blocks");
-        let mut stack = vec![blocks.clone()];
+        // Bedrock layout first; Java packs keep theirs under assets/.
+        let mut stack: Vec<PathBuf> = loose.iter().map(|d| self.root.join(d)).filter(|d| d.is_dir()).collect();
         while let Some(d) = stack.pop() {
             for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
                 let p = e.path();
@@ -73,11 +95,11 @@ impl Layer {
             }
         }
         let arch = self.root.join("__brarchive/textures");
-        let mut dirs = vec![("textures/blocks".to_string(), arch.join("blocks.brarchive"))];
-        for e in std::fs::read_dir(arch.join("blocks")).into_iter().flatten().flatten() {
+        let mut dirs = vec![(format!("textures/{arch_name}"), arch.join(format!("{arch_name}.brarchive")))];
+        for e in std::fs::read_dir(arch.join(arch_name)).into_iter().flatten().flatten() {
             let p = e.path();
             if let Some(n) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".brarchive")) {
-                dirs.push((format!("textures/blocks/{n}"), p.clone()));
+                dirs.push((format!("textures/{arch_name}/{n}"), p.clone()));
             }
         }
         for (dir, path) in dirs {
@@ -88,6 +110,7 @@ impl Layer {
                 }
             }
         }
+        out
     }
 }
 
@@ -145,6 +168,15 @@ pub fn lenient_json(text: &str) -> Option<Value> {
     serde_json::from_slice(&out).ok()
 }
 
+/// A texture candidate: a pack path from `terrain_texture.json`, or a file
+/// stem looked up in each layer's own index (Java and Bedrock packs keep
+/// textures in different folders).
+#[derive(Debug, Clone, PartialEq)]
+enum Cand {
+    Path(String),
+    Stem(String),
+}
+
 /// Resolved faces by (block, face, carried).
 type FaceCache = HashMap<(String, Face, bool), Option<Arc<Image>>>;
 
@@ -152,6 +184,7 @@ type FaceCache = HashMap<(String, Face, bool), Option<Arc<Image>>>;
 pub struct Pack {
     /// Human label ("BedrockOnLinux 1.26.63.1").
     pub label: String,
+    /// Lowest priority first.
     layers: Vec<Layer>,
     /// terrain key → texture paths (variants in order).
     terrain: HashMap<String, Vec<String>>,
@@ -160,6 +193,9 @@ pub struct Pack {
     /// file stem → pack-relative path without extension.
     stems: HashMap<String, String>,
     cache: Mutex<FaceCache>,
+    /// Item key → texture path (`textures/item_texture.json`, merged).
+    item_terrain: std::sync::OnceLock<HashMap<String, String>>,
+    item_cache: Mutex<HashMap<String, Option<Arc<Image>>>>,
 }
 
 impl std::fmt::Debug for Pack {
@@ -186,7 +222,14 @@ fn terrain_paths(v: &Value) -> Vec<String> {
 impl Pack {
     /// Load a stack (lowest priority first).
     pub fn load(label: impl Into<String>, roots: &[PathBuf]) -> Option<Self> {
-        let layers: Vec<Layer> = roots.iter().filter(|r| r.is_dir()).cloned().map(Layer::new).collect();
+        Self::load_tiers(label, &[roots.to_vec()])
+    }
+
+    /// Load priority tiers (lowest first): typically the vanilla stack,
+    /// then one tier per enabled add-on pack, bottom to top. Each tier is
+    /// itself a stack of layers (lowest first).
+    pub fn load_tiers(label: impl Into<String>, tiers: &[Vec<PathBuf>]) -> Option<Self> {
+        let layers: Vec<Layer> = tiers.iter().enumerate().flat_map(|(t, roots)| roots.iter().filter(|r| r.is_dir()).cloned().map(move |r| Layer::new(r, t))).collect();
         if layers.is_empty() {
             return None;
         }
@@ -211,12 +254,12 @@ impl Pack {
                     }
                 }
             }
-            l.block_stems(&mut stems);
+            stems.extend(l.stems.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
         if stems.is_empty() && terrain.is_empty() {
             return None;
         }
-        Some(Self { label: label.into(), layers, terrain, blocks, stems, cache: Mutex::new(HashMap::new()) })
+        Some(Self { label: label.into(), layers, terrain, blocks, stems, cache: Mutex::new(HashMap::new()), item_terrain: std::sync::OnceLock::new(), item_cache: Mutex::new(HashMap::new()) })
     }
 
     /// Distinct block texture files known.
@@ -227,17 +270,19 @@ impl Pack {
     /// Decode a texture by pack path without extension (newest layer
     /// first). Flipbook strips are cropped to their first square frame.
     pub fn image(&self, rel: &str) -> Option<Image> {
-        for l in self.layers.iter().rev() {
-            for ext in [".png", ".tga"] {
-                if let Some(bytes) = l.read(&format!("{rel}{ext}"))
-                    && let Ok(mut img) = crate::decode::decode(&bytes)
-                {
-                    if img.h > img.w && img.w > 0 {
-                        img.rgba.truncate((img.w * img.w * 4) as usize);
-                        img.h = img.w;
-                    }
-                    return Some(img);
+        self.layers.iter().rev().find_map(|l| Self::image_in(l, rel))
+    }
+
+    fn image_in(l: &Layer, rel: &str) -> Option<Image> {
+        for ext in [".png", ".tga"] {
+            if let Some(bytes) = l.read(&format!("{rel}{ext}"))
+                && let Ok(mut img) = crate::decode::decode(&bytes)
+            {
+                if img.h > img.w && img.w > 0 {
+                    img.rgba.truncate((img.w * img.w * 4) as usize);
+                    img.h = img.w;
                 }
+                return Some(img);
             }
         }
         None
@@ -260,15 +305,25 @@ impl Pack {
 
     /// Candidate texture paths for a block face, best first.
     pub fn candidates(&self, block: &str, face: Face, carried: bool) -> Vec<String> {
+        let mut out: Vec<String> = self.cands(block, face, carried).into_iter().filter_map(|c| match c {
+            Cand::Path(p) => Some(p),
+            Cand::Stem(s) => self.stems.get(&s).cloned(),
+        }).collect();
+        out.dedup();
+        out
+    }
+
+    /// Candidates as terrain paths or file stems (resolved per tier).
+    fn cands(&self, block: &str, face: Face, carried: bool) -> Vec<Cand> {
         let n = block.rsplit(':').next().unwrap_or(block);
-        let mut out: Vec<String> = Vec::new();
-        let from_blocks = |name: &str, variant: usize, out: &mut Vec<String>| {
+        let mut out: Vec<Cand> = Vec::new();
+        let from_blocks = |name: &str, variant: usize, out: &mut Vec<Cand>| {
             if let Some((tex, car)) = self.blocks.get(name) {
                 let src = if carried { car.as_ref().unwrap_or(tex) } else { tex };
                 if let Some(key) = Self::face_key(src, face)
                     && let Some(paths) = self.terrain.get(&key)
                 {
-                    out.push(paths.get(variant).unwrap_or(&paths[0]).clone());
+                    out.push(Cand::Path(paths.get(variant).unwrap_or(&paths[0]).clone()));
                 }
             }
         };
@@ -350,11 +405,12 @@ impl Pack {
         };
         for w in &names {
             for s in suffixes {
-                if let Some(p) = self.stems.get(&format!("{w}{s}")) {
-                    out.push(p.clone());
+                let stem = format!("{w}{s}");
+                if carried && self.stems.contains_key(&format!("{stem}_carried")) {
+                    out.insert(0, Cand::Stem(format!("{stem}_carried")));
                 }
-                if carried && let Some(p) = self.stems.get(&format!("{w}{s}_carried")) {
-                    out.insert(0, p.clone());
+                if self.stems.contains_key(&stem) {
+                    out.push(Cand::Stem(stem));
                 }
             }
         }
@@ -369,8 +425,105 @@ impl Pack {
         if let Some(hit) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return hit.clone();
         }
-        let img = self.candidates(block, face, carried).into_iter().find_map(|p| self.image(&p)).map(Arc::new);
+        let img = self.resolve(&self.cands(block, face, carried)).map(Arc::new);
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img.clone());
+        img
+    }
+
+    /// Highest tier first: the first tier with any candidate wins; inside a
+    /// tier, candidates in order, each from its newest layer.
+    fn resolve(&self, cands: &[Cand]) -> Option<Image> {
+        let top = self.layers.iter().map(|l| l.tier).max()?;
+        for tier in (0..=top).rev() {
+            let tl: Vec<&Layer> = self.layers.iter().filter(|l| l.tier == tier).collect();
+            for c in cands {
+                for l in tl.iter().rev() {
+                    let rel = match c {
+                        Cand::Path(p) => p.as_str(),
+                        Cand::Stem(st) => match l.stems.get(st) {
+                            Some(p) => p.as_str(),
+                            None => continue,
+                        },
+                    };
+                    if let Some(img) = Self::image_in(l, rel) {
+                        return Some(img);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// A texture by file stem (`grass_block_side_overlay`) from the highest
+    /// tier that has it.
+    pub fn stem(&self, stem: &str) -> Option<Arc<Image>> {
+        self.stems.contains_key(stem).then(|| self.resolve(&[Cand::Stem(stem.to_string())])).flatten().map(Arc::new)
+    }
+
+    /// The inventory icon of an item (`minecraft:diamond_sword`): Bedrock
+    /// `item_texture.json` key or `textures/items/<name>`, Java
+    /// `textures/item/<name>`; the highest tier with one wins. `None` for
+    /// block items without an item texture (draw the block instead).
+    pub fn item(&self, name: &str) -> Option<Arc<Image>> {
+        if let Some(hit) = self.item_cache.lock().unwrap_or_else(|e| e.into_inner()).get(name) {
+            return hit.clone();
+        }
+        let n = name.rsplit(':').next().unwrap_or(name);
+        let terrain = self.item_terrain.get_or_init(|| {
+            let mut m = HashMap::new();
+            for l in &self.layers {
+                if let Some(t) = l.read("textures/item_texture.json").and_then(|b| lenient_json(&String::from_utf8_lossy(&b)))
+                    && let Some(Value::Object(data)) = t.get("texture_data")
+                {
+                    for (k, v) in data {
+                        if let Some(p) = terrain_paths(v).into_iter().next() {
+                            m.insert(k.clone(), p);
+                        }
+                    }
+                }
+            }
+            m
+        });
+        let mut names = vec![n.to_string()];
+        // Bedrock often flips word order: golden_apple → apple_golden.
+        if let Some((first, rest)) = n.split_once('_') {
+            names.push(format!("{rest}_{first}"));
+        }
+        // Bedrock material prefixes and raw foods.
+        for (from, to) in [("wooden_", "wood_"), ("golden_", "gold_")] {
+            if let Some(rest) = n.strip_prefix(from) {
+                names.push(format!("{to}{rest}"));
+            }
+        }
+        if matches!(n, "chicken" | "beef" | "porkchop" | "mutton" | "rabbit" | "salmon") {
+            names.push(format!("{n}_raw"));
+        }
+        // A few common renames between the editions' item textures.
+        match n {
+            "cod" => names.push("fish_raw".into()),
+            "ink_sac" => names.push("dye_powder_black".into()),
+            "bone_meal" => names.push("dye_powder_white".into()),
+            "lapis_lazuli" => names.push("dye_powder_blue".into()),
+            "cocoa_beans" => names.push("dye_powder_brown".into()),
+            "oak_boat" => names.push("boat_oak".into()),
+            "clock" => names.push("clock_item".into()),
+            "compass" => names.push("compass_item".into()),
+            "bow" => names.push("bow_standby".into()),
+            "crossbow" => names.push("crossbow_standby".into()),
+            "potion" => names.push("potion_bottle_drinkable".into()),
+            _ => {}
+        }
+        let top = self.layers.iter().map(|l| l.tier).max().unwrap_or(0);
+        let img = (0..=top).rev().find_map(|tier| {
+            self.layers.iter().rev().filter(|l| l.tier == tier).find_map(|l| {
+                names.iter().find_map(|nm| {
+                    let rel = terrain.get(nm).filter(|p| l.read(&format!("{p}.png")).is_some() || l.read(&format!("{p}.tga")).is_some()).cloned().or_else(|| l.item_stems().get(nm).cloned())?;
+                    Self::image_in(l, &rel)
+                })
+            })
+        });
+        let img = img.map(Arc::new);
+        self.item_cache.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_string(), img.clone());
         img
     }
 

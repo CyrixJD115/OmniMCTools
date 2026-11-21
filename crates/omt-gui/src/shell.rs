@@ -28,6 +28,7 @@ impl OmniMCTools {
             Page::Tool(a) => a.name().into(),
             Page::Settings => "Settings".into(),
             Page::Extensions => "Extensions".into(),
+            Page::ExtTool(uid) => self.hub.tool(uid).map_or_else(|| "Tool".into(), |t| format!("Extensions › {}", t.title)),
             Page::Doc(i) => self.docs.get(i).map(|d| format!("Files › {}", d.title)).unwrap_or_default(),
             Page::Session(i) => self.sessions.get(i).map(|s| format!("{} › {}", s.app.name(), s.title)).unwrap_or_default(),
         };
@@ -40,14 +41,14 @@ impl OmniMCTools {
             .width(340)
             .style(style::input());
         let bar = row![
-            button(assets::glyph(Glyph::Menu, style::muted(), 16.0)).padding(8).on_press(Message::ToggleRail).style(style::button_style(Btn::Ghost)),
+            button(assets::glyph(Glyph::Menu, style::muted(), 24.0)).padding(4).on_press(Message::ToggleRail).style(style::button_style(Btn::Ghost)),
             button(assets::wordmark(22.0)).padding([4, 6]).on_press(Message::Nav(Page::Home)).style(style::button_style(Btn::Ghost)),
             container(text(crumb).size(13).color(style::muted())).padding([0, 8]),
             space::horizontal(),
             search,
-            button(row![assets::icon(Icon::Folder, 16.0), text("Open world…").size(12)].spacing(6).align_y(Alignment::Center)).padding([7, 12]).on_press(Message::BrowseFolder(App::MapViewer)).style(style::button_style(Btn::Standard)),
+            button(row![assets::icon(Icon::Folder, 24.0), text("Open world…").size(12)].spacing(6).align_y(Alignment::Center)).padding([3, 12]).on_press(Message::BrowseFolder(App::MapViewer)).style(style::button_style(Btn::Standard)),
             pick_list(ThemeKind::ALL.to_vec(), Some(self.settings.theme), Message::SetTheme).text_size(12).padding([7, 10]).width(160),
-            button(assets::icon(Icon::Settings, 18.0)).padding(7).on_press(Message::OpenSettings).style(style::button_style(Btn::Ghost)),
+            button(assets::icon(Icon::Settings, 24.0)).padding(4).on_press(Message::OpenSettings).style(style::button_style(Btn::Ghost)),
         ]
         .spacing(8)
         .align_y(Alignment::Center);
@@ -57,7 +58,7 @@ impl OmniMCTools {
     fn nav_item<'a>(&self, icon: Icon, label: String, page: Page, badge: Option<String>) -> Element<'a, Message> {
         let active = self.screen == page;
         let collapsed = self.settings.rail_collapsed;
-        let mut content = row![assets::icon(icon, 18.0)].spacing(10).align_y(Alignment::Center);
+        let mut content = row![assets::icon(icon, 24.0)].spacing(10).align_y(Alignment::Center);
         if !collapsed {
             content = content.push(text(label.clone()).size(13).width(Length::Fill));
             if let Some(b) = badge {
@@ -71,6 +72,23 @@ impl OmniMCTools {
         });
         let b = button(content).width(Length::Fill).padding([7, 10]).on_press(Message::Nav(page)).style(style::button_style(if active { Btn::NavActive } else { Btn::Nav }));
         tip(row![accent, b].spacing(4).align_y(Alignment::Center), label, collapsed)
+    }
+
+    /// A sidebar entry for an extension tool (opens / focuses its tab).
+    fn ext_nav_item<'a>(&self, d: &omt_extensions::tool::ToolDecl) -> Element<'a, Message> {
+        let open = self.hub.open.iter().find(|t| t.decl.key() == d.key()).map(|t| t.uid);
+        let active = open.is_some_and(|u| self.screen == Page::ExtTool(u));
+        let collapsed = self.settings.rail_collapsed;
+        let g = crate::ext_ui::glyph_named(&d.icon).unwrap_or(omt_art::Glyph::Cube);
+        let mut content = row![assets::glyph(g, style::accent(), 24.0)].spacing(10).align_y(Alignment::Center);
+        if !collapsed {
+            content = content.push(text(d.name.clone()).size(13).width(Length::Fill));
+            if open.is_some() && !active {
+                content = content.push(text("open").size(11).color(style::hint()));
+            }
+        }
+        let b = button(content).width(Length::Fill).padding([7, 10]).on_press(Message::ExtTool(crate::ext_tools::ExtToolMsg::Open(d.key()))).style(style::button_style(if active { Btn::NavActive } else { Btn::Nav }));
+        tip(row![space::horizontal().width(3), b].spacing(4).align_y(Alignment::Center), d.name.clone(), collapsed)
     }
 
     fn rail_heading<'a>(&self, title: &'a str) -> Element<'a, Message> {
@@ -95,6 +113,14 @@ impl OmniMCTools {
             let badge = if open > 0 { Some(format!("{open} open")) } else { app.alpha().then(|| "alpha".to_string()) };
             col = col.push(self.nav_item(app.icon(), app.name().into(), Page::Tool(app), badge));
         }
+        // Extension tools (EXTENSION_TYPE.TOOL), one tab each.
+        let tools: Vec<&omt_extensions::tool::ToolDecl> = self.hub.decls.iter().filter(|d| d.kind == omt_extensions::tool::ToolKind::Tool).collect();
+        if !tools.is_empty() {
+            col = col.push(self.rail_heading("EXTENSIONS"));
+            for d in tools {
+                col = col.push(self.ext_nav_item(d));
+            }
+        }
         if !self.sessions.is_empty() || !self.docs.is_empty() {
             col = col.push(self.rail_heading("OPEN"));
             for (i, s) in self.sessions.iter().enumerate() {
@@ -117,7 +143,7 @@ impl OmniMCTools {
     fn open_item<'a>(&self, icon: Icon, title: &str, dirty: bool, page: Page, close: Message, collapsed: bool) -> Element<'a, Message> {
         let active = self.screen == page;
         let dot = if dirty { " ●" } else { "" };
-        let mut content = row![assets::icon(icon, 16.0)].spacing(8).align_y(Alignment::Center);
+        let mut content = row![assets::icon(icon, 24.0)].spacing(8).align_y(Alignment::Center);
         if !collapsed {
             content = content.push(text(format!("{title}{dot}")).size(12).width(Length::Fill));
         }
@@ -170,7 +196,11 @@ impl OmniMCTools {
             Ui::Nbt(ui) => ui.view(sess).map(move |m| Message::Nbt(i, m)),
             Ui::Pruner(ui) => ui.view(sess).map(move |m| Message::Prune(i, m)),
             Ui::Converter(ui) => ui.view(sess).map(move |m| Message::Conv(i, m)),
-            Ui::Viewer(ui) => ui.view(&self.settings.bookmarks, sess.summary.spawn).map(move |m| Message::View(i, m)),
+            Ui::Viewer(ui) => {
+                // The extension tools panel is built by the app (it owns the tools).
+                let tools = (ui.prefs.panel() == Some(crate::viewer::PanelTab::Tools)).then(|| self.map_tools_panel(&ui.origin).map(|m| crate::viewer::ViewerMsg::Host(Box::new(m))));
+                ui.view(&self.settings.bookmarks, sess.summary.spawn, tools).map(move |m| Message::View(i, m))
+            }
             Ui::Editor(ui) => ui.view().map(move |m| Message::Edit(i, m)),
         };
         let status = match &tab.ui {

@@ -1,0 +1,22 @@
+[package]
+name = "omt-nativehost"
+description = "Loads OmniMCTools native plugins (compiled Rust dynamic libraries built with omt-plugin) and drives them through the same tool backend as Lua extensions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-extensions.workspace = true
+omt-plugin-abi.workspace = true
+omt-nbt.workspace = true
+libloading.workspace = true
+
+[dev-dependencies]
+omt-world.workspace = true
+serde_json.workspace = true
+
+# Loads dynamic libraries and calls across the C ABI, so it opts out of the
+# workspace `unsafe_code = "forbid"` lint (scoped to the FFI glue).
+[lints.rust]
+unsafe_code = "allow"

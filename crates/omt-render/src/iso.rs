@@ -1,15 +1,24 @@
 //! **Isometric map** (uNmINeD's "Map isometric"): the 3D view's height /
 //! colour grid drawn in a 2:1 isometric projection from one of four view
-//! angles. Painter's algorithm in rotated grid space: back to front, each
-//! cell is a top diamond plus its two visible side faces down to the front
-//! neighbours. CPU only, so it works without a GPU.
+//! angles. CPU only, so it works without a GPU.
+//!
+//! Every view angle + zoom defines one infinite, world-anchored **global
+//! iso pixel plane** ([`project`]): the GUI cuts it into fixed screen tiles
+//! ([`render_tile`]) that are streamed in as they approach the viewport and
+//! dropped when they leave it, so panning is a pure translation.
 
-use crate::voxel::Grid;
+use crate::iso_paint::{View, paint};
+use crate::voxel::{Grid, Sample};
+
+/// Height the camera centre is anchored at (sea level-ish): the global
+/// plane's vertical origin never depends on the terrain, so tiles rendered
+/// at different times always line up.
+pub const REF_Y: f64 = 64.0;
 
 /// Isometric camera.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IsoCam {
-    /// Block coordinates at the image centre.
+    /// Block coordinates at the image centre (at height [`REF_Y`]).
     pub x: f64,
     pub z: f64,
     /// View angle: 0 = looking north-west (north up-left), then clockwise
@@ -39,10 +48,32 @@ impl IsoCam {
         self.x += ddx;
         self.z += ddz;
     }
+
+    /// Global iso pixel of the view centre at `s` pixels per block.
+    pub fn center_px(&self, s: f64) -> (f64, f64) {
+        project(self.rot, s, self.vscale as f64, self.x, REF_Y, self.z)
+    }
+
+    /// Put the view centre on global iso pixel `p` (at `s` px per block).
+    pub fn set_center_px(&mut self, s: f64, p: (f64, f64)) {
+        let (x, z) = unproject(self.rot, s, self.vscale as f64, p.0, p.1, REF_Y);
+        self.x = x;
+        self.z = z;
+    }
 }
 
-/// Rotated (u, v) → world (dx, dz) offsets.
-fn unrotate(rot: u8, u: f64, v: f64) -> (f64, f64) {
+/// World (x, z) → rotated (u, v) for view angle `rot`.
+pub fn rotate(rot: u8, x: f64, z: f64) -> (f64, f64) {
+    match rot % 4 {
+        0 => (x, z),
+        1 => (z, -x),
+        2 => (-x, -z),
+        _ => (-z, x),
+    }
+}
+
+/// Rotated (u, v) → world (x, z) (inverse of [`rotate`]).
+pub fn unrotate(rot: u8, u: f64, v: f64) -> (f64, f64) {
     match rot % 4 {
         0 => (u, v),
         1 => (-v, u),
@@ -51,300 +82,114 @@ fn unrotate(rot: u8, u: f64, v: f64) -> (f64, f64) {
     }
 }
 
-/// Original cell (q, r) → rotated index (a, b) in an n×n grid.
-fn rot_index(rot: u8, n: usize, q: usize, r: usize) -> (usize, usize) {
-    match rot % 4 {
-        0 => (q, r),
-        1 => (r, n - 1 - q),
-        2 => (n - 1 - q, n - 1 - r),
-        _ => (n - 1 - r, q),
+/// Global iso pixel of world point (x, y, z) at `s` px per block.
+pub fn project(rot: u8, s: f64, vscale: f64, x: f64, y: f64, z: f64) -> (f64, f64) {
+    let (u, v) = rotate(rot, x, z);
+    ((u - v) * s, (u + v) * s / 2.0 - y * s * vscale)
+}
+
+/// World (x, z) seen at global iso pixel `(px, py)` on height `y`.
+pub fn unproject(rot: u8, s: f64, vscale: f64, px: f64, py: f64, y: f64) -> (f64, f64) {
+    let e = px / s;
+    let d = 2.0 * (py + y * s * vscale) / s;
+    unrotate(rot, (d + e) / 2.0, (d - e) / 2.0)
+}
+
+/// World box `(x0, z0, x1, z1)` holding every column (heights in
+/// `low..=high`) that can draw into the global pixel rectangle
+/// `[px0, px1) × [py0, py1)`, padded by `pad` blocks.
+#[allow(clippy::too_many_arguments)]
+pub fn world_box(rot: u8, s: f64, vscale: f64, px0: f64, py0: f64, px1: f64, py1: f64, low: f64, high: f64, pad: f64) -> (f64, f64, f64, f64) {
+    let (e0, e1) = (px0 / s - pad, px1 / s + pad);
+    let (d0, d1) = (2.0 * (py0 + low * s * vscale) / s - 2.0 * pad, 2.0 * (py1 + high * s * vscale) / s + 2.0 * pad);
+    let mut b = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (e, d) in [(e0, d0), (e0, d1), (e1, d0), (e1, d1)] {
+        let (x, z) = unrotate(rot, (d + e) / 2.0, (d - e) / 2.0);
+        b = (b.0.min(x), b.1.min(z), b.2.max(x), b.3.max(z));
     }
+    b
 }
 
-fn shade(c: [u8; 3], k: f32) -> [u8; 4] {
-    [(c[0] as f32 * k) as u8, (c[1] as f32 * k) as u8, (c[2] as f32 * k) as u8, 255]
-}
-
-/// Screen position of rotated block coords `(u, v)` at height `y` (shared
-/// by both painters).
-struct View {
-    hf: f32,
-    /// Screen pos of the rotated-grid origin (cell (0,0) corner).
-    ox: f32,
-    oy: f32,
-    /// Pixels per block along a diamond edge; vertical = `s · vscale`.
-    s: f32,
-    vs: f32,
-}
-
-impl View {
-    fn new(cam: &IsoCam, w: usize, h: usize, n: usize, hh: &[f32], ac: f32, bc: f32) -> Self {
-        let href = {
-            let (a, b) = (ac.clamp(0.0, n as f32 - 1.0) as usize, bc.clamp(0.0, n as f32 - 1.0) as usize);
-            let v = hh[b * n + a];
-            if v.is_nan() { 64.0 } else { v }
-        };
-        let s = cam.scale.max(0.01);
-        Self { hf: h as f32, ox: w as f32 / 2.0 + ac * s, oy: h as f32 / 2.0 + bc * s / 2.0 + href * s * cam.vscale, s, vs: s * cam.vscale }
-    }
-    /// Screen position of rotated block coords `(u, v)` at height `y`.
-    fn proj(&self, u: f32, v: f32, y: f32) -> (f32, f32) {
-        (self.ox + (u - v) * self.s, self.oy + (u + v) * self.s / 2.0 - y * self.vs)
-    }
-}
-
-/// Render `w × h` RGBA over `background`.
+/// Render `w × h` RGBA centred on `cam` over `background`.
 pub fn render(grid: &Grid, cam: &IsoCam, w: usize, h: usize, background: [u8; 3]) -> Vec<u8> {
-    paint(grid, cam, w, h, background, false)
+    frame(grid, cam, w, h, background, false)
 }
 
 /// [`render`] with the grid's per-cell block looks ([`Grid::kinds`]): top
 /// diamonds carry the world-aligned block texture, sides the shaded side
-/// texture (cut-out texels show what was painted behind). Cells without a
-/// kind, and water, fall back to the flat painter.
+/// texture (cut-out texels show the map colour). Cells without a kind, and
+/// water, fall back to the flat painter.
 pub fn render_textured(grid: &Grid, cam: &IsoCam, w: usize, h: usize, background: [u8; 3]) -> Vec<u8> {
-    paint(grid, cam, w, h, background, true)
+    frame(grid, cam, w, h, background, true)
 }
 
-fn paint(grid: &Grid, cam: &IsoCam, w: usize, h: usize, background: [u8; 3], textured: bool) -> Vec<u8> {
-    let textured = textured && !grid.kinds.is_empty();
-    let bg_px = [background[0], background[1], background[2], 255];
-    let n = grid.n;
-    if n == 0 || w == 0 || h == 0 {
-        let mut out = vec![0u8; w * h * 4];
-        for px in out.as_chunks_mut::<4>().0 {
-            *px = bg_px;
-        }
-        return out;
-    }
-    // Heights/colours in rotated index space.
-    let mut hh = vec![f32::NAN; n * n];
-    let mut cc = vec![[0u8; 3]; n * n];
-    for r in 0..n {
-        for q in 0..n {
-            let (a, b) = rot_index(cam.rot, n, q, r);
-            hh[b * n + a] = grid.height[r * n + q];
-            cc[b * n + a] = grid.color[r * n + q];
-        }
-    }
-    let c = grid.cell as f32;
-    let s = cam.scale.max(0.01);
-    // Camera centre in rotated index space (continuous).
-    let qc = ((cam.x - grid.x0) / grid.cell) as f32;
-    let rc = ((cam.z - grid.z0) / grid.cell) as f32;
-    let nf = n as f32;
-    let (ac, bc) = match cam.rot % 4 {
-        0 => (qc, rc),
-        1 => (rc, nf - qc),
-        2 => (nf - qc, nf - rc),
-        _ => (nf - rc, qc),
-    };
-    let view = View::new(cam, w, h, n, &hh, ac, bc);
+fn frame(grid: &Grid, cam: &IsoCam, w: usize, h: usize, background: [u8; 3], textured: bool) -> Vec<u8> {
+    let s = cam.scale.max(0.01) as f64;
+    let (cx, cy) = cam.center_px(s);
+    let view = View::at(grid, cam.rot, s, cam.vscale as f64, (cx - w as f64 / 2.0, cy - h as f64 / 2.0));
+    paint(grid, cam.rot, view, w, h, background, textured)
+}
 
-    let low = hh.iter().copied().filter(|v| !v.is_nan()).fold(f32::INFINITY, f32::min);
-    let high = hh.iter().copied().filter(|v| !v.is_nan()).fold(f32::NEG_INFINITY, f32::max);
-    // Texture lookup helpers (world-aligned: textures keep their compass
-    // orientation at every view angle and repeat per block inside a cell).
-    let texel_at = |tex: &[[u8; 4]], wx: f64, wz: f64| -> [u8; 4] {
-        let tx = (((wx - wx.floor()) * 16.0) as usize).min(15);
-        let tz = (((wz - wz.floor()) * 16.0) as usize).min(15);
-        tex[tz * 16 + tx]
-    };
-    let texel_col = |wx: f64, wz: f64, along_x: bool| -> usize {
-        let w = if along_x { wx } else { wz };
-        (((w - w.floor()) * 16.0) as usize).min(15)
-    };
-    let texel_row = |tex: &[[u8; 4]], col: usize, y: f32| -> [u8; 4] {
-        let f = (-y) - (-y).floor();
-        tex[((f * 16.0) as usize).min(15) * 16 + col]
-    };
-    let (fax, faz) = unrotate(cam.rot, 1.0, 0.0);
-    // Vertical strips painted in parallel: each strip runs the painter's
-    // algorithm over the cells that touch its x range, clipped to it.
-    let strips = rayon::current_num_threads().clamp(1, 32).min(w);
-    let strip_w = w.div_ceil(strips);
-    let paint_strip = |xs: usize| -> Vec<u8> {
-        let xe = (xs + strip_w).min(w);
-        let sw = xe - xs;
-        let mut out = vec![0u8; sw * h * 4];
-        for px in out.as_chunks_mut::<4>().0 {
-            *px = bg_px;
-        }
-        let (xsf, xef) = (xs as f32, xe as f32);
-        let put = |x: i64, y: i64, col: [u8; 4], out: &mut Vec<u8>| {
-            if x >= xs as i64 && y >= 0 && (x as usize) < xe && (y as usize) < h {
-                let o = (y as usize * sw + (x as usize - xs)) * 4;
-                out[o..o + 4].copy_from_slice(&col);
-            }
-        };
-        // Only the cells that can reach this strip: screen x bounds the
-        // anti-diagonal (u - v), screen y and the height range bound the
-        // diagonal (u + v). In index space D = a + b, E = a - b.
-        let e_lo = ((xsf - view.ox) / view.s / c - 1.0 + ac - bc).floor() as i64;
-        let e_hi = ((xef - view.ox) / view.s / c + 1.0 + ac - bc).ceil() as i64;
-        let d_lo = ((2.0 * (-view.oy + low * view.vs) / view.s) / c - 2.0 + ac + bc).floor().max(0.0) as usize;
-        let d_hi = (((2.0 * (view.hf - view.oy + high * view.vs) / view.s) / c + 2.0 + ac + bc).ceil().max(0.0) as usize).min(2 * n - 2);
-        for diag in d_lo..=d_hi {
-            let a0 = (diag.saturating_sub(n - 1) as i64).max((diag as i64 + e_lo).div_euclid(2));
-            let a1 = ((diag.min(n - 1)) as i64).min((diag as i64 + e_hi).div_euclid(2) + 1);
-            if a1 < a0 {
-                continue;
-            }
-            for a in a0.max(0) as usize..=a1.min(diag.min(n - 1) as i64) as usize {
-                if a > diag {
-                    continue;
-                }
-                let b = diag - a;
-                let top = hh[b * n + a];
-                if top.is_nan() {
-                    continue;
-                }
-                let (u, v) = ((a as f32 - ac) * c, (b as f32 - bc) * c);
-                // Top diamond centre and extents.
-                let (cx, cy) = view.proj(u + c / 2.0, v + c / 2.0, top);
-                let (ha, hb) = (c * s, c * s / 2.0);
-                // Cull (sides can reach far below).
-                let depth = (top - low) * view.vs;
-                if cx + ha < xsf || cx - ha > xef || cy + hb + depth < 0.0 || cy - hb > view.hf {
-                    continue;
-                }
-                let col = cc[b * n + a];
-                let kind = if textured {
-                    let k = grid.kind[b * n + a];
-                    (k != crate::voxel::NO_KIND).then(|| grid.kinds.get(k as usize)).flatten()
-                } else {
-                    None
-                };
-                let use_tex = textured && kind.is_some_and(|k| !k.water);
-                // Side faces: down to the front neighbours (or the lowest cell).
-                // Unknown neighbours (grid edge, unloaded) end in a thin slab.
-                let front = |aa: usize, bb: usize| if aa < n && bb < n && !hh[bb * n + aa].is_nan() { hh[bb * n + aa] } else { top - 6.0 * c.max(1.0) };
-                let left_drop = ((top - front(a, b + 1)).max(0.0)) * view.vs;
-                let right_drop = ((top - front(a + 1, b)).max(0.0)) * view.vs;
-                // World origin of this cell (the painter walks rotated indices;
-                // textures need the original compass position).
-                let (q, r) = match cam.rot % 4 {
-                    0 => (a, b),
-                    1 => (n - 1 - b, a),
-                    2 => (n - 1 - a, n - 1 - b),
-                    _ => (b, n - 1 - a),
-                };
-                let (wx0, wz0) = (grid.x0 + q as f64 * c as f64, grid.z0 + r as f64 * c as f64);
-                let flat = [col[0], col[1], col[2], 255];
-                // Cut-out texels (plants, leaves) take the cell's map color so
-                // they never punch holes down to the sky.
-                let opaque = |t: [u8; 4], k: f32| if t[3] < 128 { flat } else { shade([t[0], t[1], t[2]], k) };
-                let (x0, x1) = (((cx - ha).floor() as i64).max(xs as i64), ((cx + ha).ceil() as i64).min(xe as i64));
-                if use_tex {
-                    let k = kind.unwrap();
-                    // Left face (+v side), textured and sheared.
-                    if left_drop > 0.0 {
-                        let (x0l, x1l) = ((cx - ha).floor() as i64, cx.ceil() as i64);
-                        for x in x0l..x1l {
-                            let t = ((x as f32 + 0.5) - (cx - ha)) / ha;
-                            let ytop = cy + t * hb;
-                            for y in ytop.floor() as i64..(ytop + left_drop).ceil() as i64 {
-                                let wy = top - ((y as f32 + 0.5) - ytop) / view.vs;
-                                let (du, dv) = unrotate(cam.rot, (t * c) as f64, c as f64);
-                                let tc = texel_row(&k.side, texel_col(wx0 + du, wz0 + dv, fax != 0.0), wy);
-                                put(x, y, opaque(tc, 0.72), &mut out);
-                            }
-                        }
-                    }
-                    // Right face (+a side).
-                    if right_drop > 0.0 {
-                        let (x0r, x1r) = (cx.floor() as i64, (cx + ha).ceil() as i64);
-                        for x in x0r..x1r {
-                            let t = ((x as f32 + 0.5) - cx) / ha;
-                            let ytop = cy + hb - t * hb;
-                            for y in ytop.floor() as i64..(ytop + right_drop).ceil() as i64 {
-                                let wy = top - ((y as f32 + 0.5) - ytop) / view.vs;
-                                let (du, dv) = unrotate(cam.rot, c as f64, (t * c) as f64);
-                                let tc = texel_row(&k.side, texel_col(wx0 + du, wz0 + dv, faz != 0.0), wy);
-                                put(x, y, opaque(tc, 0.56), &mut out);
-                            }
-                        }
-                    }
-                    // Top diamond: inverse-map each pixel into the cell and
-                    // sample the world-aligned top texture.
-                    let (y0, y1) = ((cy - hb).floor() as i64, (cy + hb).ceil() as i64);
-                    let u0 = (a as f32 - ac) * c;
-                    let v0 = (b as f32 - bc) * c;
-                    for y in y0..y1 {
-                        let dy = ((y as f32 + 0.5) - cy).abs() / hb.max(0.01);
-                        if dy > 1.0 {
-                            continue;
-                        }
-                        let half = ha * (1.0 - dy);
-                        for x in x0..x1 {
-                            if ((x as f32 + 0.5) - cx).abs() > half + 0.5 {
-                                continue;
-                            }
-                            let diff = ((x as f32 + 0.5) - view.ox) / view.s;
-                            let sum = 2.0 * ((y as f32 + 0.5) - view.oy + top * view.vs) / view.s;
-                            let (du, dv) = unrotate(cam.rot, ((diff + sum) / 2.0 - u0) as f64, ((sum - diff) / 2.0 - v0) as f64);
-                            let tc = texel_at(&k.top, wx0 + du, wz0 + dv);
-                            put(x, y, opaque(tc, 1.0), &mut out);
-                        }
-                    }
-                    continue;
-                }
-                // Left face (+v side): x from cx-ha to cx, top edge from (cx-ha, cy) to (cx, cy+hb).
-                if left_drop > 0.0 {
-                    let lc = shade(col, 0.72);
-                    let (x0, x1) = ((cx - ha).floor() as i64, cx.ceil() as i64);
-                    for x in x0..x1 {
-                        let t = ((x as f32 + 0.5) - (cx - ha)) / ha;
-                        let ytop = cy + t * hb;
-                        for y in ytop.floor() as i64..(ytop + left_drop).ceil() as i64 {
-                            put(x, y, lc, &mut out);
-                        }
-                    }
-                }
-                if right_drop > 0.0 {
-                    let rc2 = shade(col, 0.56);
-                    let (x0, x1) = (cx.floor() as i64, (cx + ha).ceil() as i64);
-                    for x in x0..x1 {
-                        let t = ((x as f32 + 0.5) - cx) / ha;
-                        let ytop = cy + hb - t * hb;
-                        for y in ytop.floor() as i64..(ytop + right_drop).ceil() as i64 {
-                            put(x, y, rc2, &mut out);
-                        }
-                    }
-                }
-                // Top diamond.
-                let tc = [col[0], col[1], col[2], 255];
-                let (y0, y1) = ((cy - hb).floor() as i64, (cy + hb).ceil() as i64);
-                for y in y0..y1 {
-                    let dy = ((y as f32 + 0.5) - cy).abs() / hb.max(0.01);
-                    if dy > 1.0 {
-                        continue;
-                    }
-                    let half = ha * (1.0 - dy);
-                    for x in x0..x1 {
-                        if ((x as f32 + 0.5) - cx).abs() <= half + 0.5 {
-                            put(x, y, tc, &mut out);
-                        }
-                    }
-                }
-            }
-        }
-        out
-    };
-    use rayon::prelude::*;
-    let parts: Vec<Vec<u8>> = (0..strips).into_par_iter().map(|k| paint_strip(k * strip_w)).collect();
-    let mut out = vec![0u8; w * h * 4];
-    for (k, part) in parts.iter().enumerate() {
-        let xs = k * strip_w;
-        if xs >= w {
-            continue;
-        }
-        let sw = (xs + strip_w).min(w) - xs;
-        for y in 0..h {
-            out[(y * w + xs) * 4..(y * w + xs + sw) * 4].copy_from_slice(&part[y * sw * 4..(y + 1) * sw * 4]);
-        }
+/// One screen tile of the global iso plane.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TileSpec {
+    pub rot: u8,
+    /// Rendered pixels per block.
+    pub scale: f64,
+    pub vscale: f64,
+    /// Global pixel of the tile's top-left corner (at `scale`).
+    pub px: f64,
+    pub py: f64,
+    /// Tile size in pixels.
+    pub size: usize,
+    /// Height range of the loaded terrain (bounds which columns can reach
+    /// the tile).
+    pub low: f32,
+    pub high: f32,
+}
+
+impl TileSpec {
+    /// Grid cell size: whole blocks when zoomed in, a power of two blocks
+    /// per cell when a block is smaller than a pixel.
+    pub fn cell(&self) -> f64 {
+        if self.scale >= 1.0 { 1.0 } else { (1.0 / self.scale).log2().ceil().exp2().min(64.0) }
     }
-    out
+
+    /// Cell-aligned world box the tile's grid covers.
+    pub fn grid_box(&self) -> (f64, f64, f64, f64) {
+        let c = self.cell();
+        let (x0, z0, x1, z1) = world_box(self.rot, self.scale, self.vscale, self.px, self.py, self.px + self.size as f64, self.py + self.size as f64, self.low as f64, self.high as f64, 2.0 * c);
+        ((x0 / c).floor() * c, (z0 / c).floor() * c, (x1 / c).ceil() * c, (z1 / c).ceil() * c)
+    }
+}
+
+impl TileSpec {
+    /// Whether the column at world (x, z) can draw into this tile (inside
+    /// the rotated band the tile sees, padded by two cells).
+    pub fn reaches(&self, x: f64, z: f64) -> bool {
+        let (u, v) = rotate(self.rot, x, z);
+        let (s, vs) = (self.scale, self.scale * self.vscale);
+        let pad = 2.0 * self.cell();
+        let (e, d) = (u - v, u + v);
+        let size = self.size as f64;
+        e >= self.px / s - pad && e <= (self.px + size) / s + pad && d >= 2.0 * (self.py + self.low as f64 * vs) / s - 2.0 * pad && d <= 2.0 * (self.py + size + self.high as f64 * vs) / s + 2.0 * pad
+    }
+}
+
+/// Sample the columns that can reach a tile from `f` into a cell-aligned
+/// grid (so neighbouring tiles agree pixel for pixel). Set
+/// [`Grid::kinds`] afterwards for the textured painter.
+pub fn tile_grid(spec: &TileSpec, f: &Sample<'_>) -> Grid {
+    let c = spec.cell();
+    let (x0, z0, x1, z1) = spec.grid_box();
+    let n = (((x1 - x0).max(z1 - z0) / c).ceil() as usize).max(1);
+    Grid::build_at(x0, z0, c, n, Vec::new(), f)
+}
+
+/// Paint a tile's grid (from [`tile_grid`]) as `size × size` RGBA.
+pub fn paint_tile(spec: &TileSpec, grid: &Grid, background: [u8; 3], textured: bool) -> Vec<u8> {
+    let view = View::at(grid, spec.rot, spec.scale, spec.vscale, (spec.px, spec.py));
+    paint(grid, spec.rot, view, spec.size, spec.size, background, textured)
 }
 
 #[cfg(test)]
@@ -395,6 +240,51 @@ mod tests {
         assert!(c.x < 0.0 && c.z < 0.0, "{c:?}");
     }
 
+    fn hills(x: f64, z: f64) -> Option<(f32, [u8; 3], u16)> {
+        let h = 64.0 + ((x * 0.07).sin() * (z * 0.05).cos() * 18.0) as f32;
+        Some((h.floor(), [(x.rem_euclid(7.0) * 30.0) as u8, 120, (z.rem_euclid(5.0) * 40.0) as u8], NO_KIND))
+    }
+
+    #[test]
+    fn projection_round_trips() {
+        for rot in 0..4 {
+            let (px, py) = project(rot, 3.0, 1.0, 123.5, REF_Y, -77.25);
+            let (x, z) = unproject(rot, 3.0, 1.0, px, py, REF_Y);
+            assert!((x - 123.5).abs() < 1e-9 && (z + 77.25).abs() < 1e-9, "rot {rot}: {x},{z}");
+            let mut c = IsoCam { rot, scale: 3.0, ..Default::default() };
+            c.set_center_px(3.0, (px + 30.0, py - 12.0));
+            let mut d = IsoCam { x: 123.5, z: -77.25, rot, scale: 3.0, ..Default::default() };
+            d.pan(-30.0, 12.0);
+            assert!((c.x - d.x).abs() < 1e-9 && (c.z - d.z).abs() < 1e-9, "pan == move centre");
+        }
+    }
+
+    /// Four tiles side by side paint exactly what one tile twice the size
+    /// paints (no seams, whatever the view angle or zoom).
+    #[test]
+    fn tiles_are_seamless() {
+        for (rot, scale) in [(0u8, 3.0), (1, 2.0), (2, 0.5), (3, 1.0)] {
+            let base = TileSpec { rot, scale, vscale: 1.0, px: 1000.0, py: -2000.0, size: 128, low: 40.0, high: 90.0 };
+            let big = paint_tile(&base, &tile_grid(&base, &hills), [0, 0, 0], false);
+            let mut diff = 0;
+            for (qx, qy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let s = TileSpec { px: base.px + qx as f64 * 64.0, py: base.py + qy as f64 * 64.0, size: 64, ..base };
+                let img = paint_tile(&s, &tile_grid(&s, &hills), [0, 0, 0], false);
+                for y in 0..64 {
+                    for x in 0..64 {
+                        let a = &img[(y * 64 + x) * 4..][..4];
+                        let b = &big[((y + qy * 64) * 128 + x + qx * 64) * 4..][..4];
+                        diff += usize::from(a != b);
+                    }
+                }
+            }
+            assert_eq!(diff, 0, "rot {rot} scale {scale}: differing pixels at tile seams");
+            // Terrain covers the tile (no sky holes inside the loaded area).
+            let sky = big.as_chunks::<4>().0.iter().filter(|p| **p == [0, 0, 0, 255]).count();
+            assert!(sky < 128 * 128 / 50, "rot {rot}: {sky} sky pixels");
+        }
+    }
+
     /// Timing probe: `cargo test --release -p omt-render iso_bench -- --ignored --nocapture`.
     #[test]
     #[ignore = "timing probe"]
@@ -406,5 +296,13 @@ mod tests {
             std::hint::black_box(render(&g, &cam, 1600, 900, [0, 0, 0]));
         }
         println!("iso render 1600x900, 768² grid: {:.1} ms/frame", t.elapsed().as_secs_f64() * 1000.0 / 5.0);
+        for scale in [4.0, 2.0, 1.0, 0.5] {
+            let spec = TileSpec { rot: 1, scale, vscale: 1.0, px: 5000.0, py: 3000.0, size: 256, low: 30.0, high: 110.0 };
+            let t = std::time::Instant::now();
+            let g = tile_grid(&spec, &hills);
+            let built = t.elapsed();
+            std::hint::black_box(paint_tile(&spec, &g, [0, 0, 0], false));
+            println!("256² tile @ {scale} px/block: grid {}² in {:.1} ms, total {:.1} ms", g.n, built.as_secs_f64() * 1000.0, t.elapsed().as_secs_f64() * 1000.0);
+        }
     }
 }

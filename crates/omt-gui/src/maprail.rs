@@ -20,11 +20,12 @@ use crate::assets;
 use crate::style::{self, Btn};
 
 /// Width of the rail strip (the dark column the buttons sit in).
-pub const STRIP: f32 = 40.0;
+pub const STRIP: f32 = 44.0;
 /// Edge of a rail button (square, so rows and columns stay aligned).
-const BTN: f32 = 32.0;
-/// Glyph size: the art is 16×16, drawn 1:1 so pixels stay crisp.
-const GLYPH: f32 = 16.0;
+const BTN: f32 = 36.0;
+/// Glyph size: Pixelarticons are drawn on a 24-px grid; 1:1 keeps every
+/// icon pixel one screen pixel.
+const GLYPH: f32 = 24.0;
 
 /// Which way tooltips point: away from the screen edge the strip is on.
 #[derive(Debug, Clone, Copy)]

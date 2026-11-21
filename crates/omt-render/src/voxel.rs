@@ -38,6 +38,12 @@ impl Grid {
     pub fn build(cx: f64, cz: f64, radius: f64, n: usize, kinds: Vec<crate::blocks3d::Kind>, f: &Sample<'_>) -> Self {
         let cell = (2.0 * radius / n as f64).max(1.0);
         let (x0, z0) = (cx - cell * n as f64 / 2.0, cz - cell * n as f64 / 2.0);
+        Self::build_at(x0, z0, cell, n, kinds, f)
+    }
+
+    /// Build an `n × n` grid of `cell`-block cells whose top-left corner is
+    /// block (`x0`, `z0`) (isometric tiles align their grids to `cell`).
+    pub fn build_at(x0: f64, z0: f64, cell: f64, n: usize, kinds: Vec<crate::blocks3d::Kind>, f: &Sample<'_>) -> Self {
         type Row = (Vec<f32>, Vec<[u8; 3]>, Vec<u16>);
         let rows: Vec<Row> = (0..n)
             .into_par_iter()

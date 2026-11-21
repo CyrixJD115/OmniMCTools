@@ -1,0 +1,6 @@
+{
+  "name": "Chest Explorer",
+  "version": "1.0.0",
+  "author": "OmniMCTools",
+  "description": "Example of the extension platform: find and open containers, player inventories, and an 'Open as chest' NBT action."
+}

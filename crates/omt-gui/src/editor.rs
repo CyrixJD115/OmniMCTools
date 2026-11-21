@@ -41,6 +41,8 @@ pub enum EditorMsg {
     /// Ask the host to read the clipboard and send `PasteFromClipboard`.
     RequestPaste,
     ApplyImport,
+    /// Run an extension NBT action (`ext/id`) on the selected tag.
+    RunAction(String),
 }
 
 /// Where a document is saved. `File` documents save themselves (atomic +
@@ -95,6 +97,15 @@ pub struct EditorTab {
     /// Last extension pass: `(manager revision, document root, styles)` —
     /// reused while the tree is unchanged so keystrokes never re-run Lua.
     pub(crate) ext_cache: Option<(u64, Tag, HashMap<String, omt_script::RowStyle>)>,
+    /// Stable identity (extension actions hand their edits back to it).
+    pub uid: u64,
+    /// Extension NBT actions offered on the selected tag, and the
+    /// discovery generation they come from.
+    pub actions: Vec<omt_extensions::tool::ToolDecl>,
+    pub actions_gen: u64,
+    /// An action the user started: `(ext/id, path, name, tag)` — the app
+    /// picks it up and opens the action's tool.
+    pub pending_action: Option<(String, TagPath, String, Tag)>,
     /// Live styles for row rendering (kept in sync with `ext_cache`).
     pub(crate) ext_styles: HashMap<String, omt_script::RowStyle>,
     /// The tree state whose extension edit was last applied/undone (see
@@ -156,6 +167,10 @@ impl EditorTab {
             ext: None,
             entry_hints: Vec::new(),
             ext_cache: None,
+            uid: crate::editor_actions::next_uid(),
+            actions: Vec::new(),
+            actions_gen: 0,
+            pending_action: None,
             ext_styles: HashMap::new(),
             ext_edited_input: None,
             ext_status: String::new(),
@@ -224,6 +239,12 @@ impl EditorTab {
         self.rows.iter().find(|r| r.selected)
     }
 
+    /// Expand a path's row (user clicks toggle; this is for the
+    /// `OMT_DEBUG_NBT_ACTION` hook so a scripted edit is visible).
+    pub(crate) fn expand(&mut self, path: &TagPath) {
+        self.expanded.insert(path.to_string());
+    }
+
     pub fn update(&mut self, msg: EditorMsg) -> Vec<iced::Task<EditorMsg>> {
         // Returned tasks (clipboard ops); kept small.
         match msg {
@@ -248,6 +269,7 @@ impl EditorTab {
             EditorMsg::AddValueInput(text) => self.add_value_input = text,
             EditorMsg::CommitAddChild => self.commit_add_child(),
             EditorMsg::CommitAddIndex => self.commit_add_index(),
+            EditorMsg::RunAction(key) => self.run_action(key),
             EditorMsg::DeleteSelected => self.delete_selected(),
             EditorMsg::MoveUp => self.move_selected(-1),
             EditorMsg::MoveDown => self.move_selected(1),

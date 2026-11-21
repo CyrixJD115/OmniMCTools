@@ -44,13 +44,16 @@ pub enum PanelTab {
     Find,
     /// PNG export.
     Export,
+    /// Extension tools that work on the map (`map = true`): their UI, and
+    /// map clicks go to them.
+    Tools,
 }
 
 impl PanelTab {
     /// Strip order: world data · look & filters · navigation & actions
     /// (the strip draws a separator between the groups).
-    pub const ALL: [PanelTab; 16] = [
-        Self::Info, Self::Inspect, Self::Players, Self::Biomes, Self::Blocks, Self::Entities, Self::View, Self::Style, Self::Stylesheet, Self::Filter, Self::Highlight, Self::Registry, Self::Layers, Self::Find, Self::Presets, Self::Export,
+    pub const ALL: [PanelTab; 17] = [
+        Self::Info, Self::Inspect, Self::Players, Self::Biomes, Self::Blocks, Self::Entities, Self::View, Self::Style, Self::Stylesheet, Self::Filter, Self::Highlight, Self::Registry, Self::Layers, Self::Find, Self::Presets, Self::Export, Self::Tools,
     ];
 
     /// Monochrome glyph for the panel's icon strip (matches the rail).
@@ -72,6 +75,7 @@ impl PanelTab {
             Self::Layers => omt_art::Glyph::Layers,
             Self::Find => omt_art::Glyph::Search,
             Self::Export => omt_art::Glyph::Export,
+            Self::Tools => omt_art::Glyph::Grid,
         }
     }
 
@@ -93,6 +97,7 @@ impl PanelTab {
             Self::Layers => "Layers",
             Self::Find => "Find",
             Self::Export => "Export",
+            Self::Tools => "Extension tools",
         }
     }
 }

@@ -65,6 +65,11 @@ pub fn kind_of(name: &str, pack: Option<&Pack>) -> Kind {
                 }
             }
             if n == "grass_block" {
+                // Java packs: an opaque dirt side + a gray fringe overlay.
+                if let Some(o) = p.stem("grass_block_side_overlay") {
+                    let fringe = tinted(tex16(&o), [0x79, 0xc0, 0x5a]);
+                    side = side.iter().zip(&fringe).map(|(s, f)| if f[3] >= 128 { *f } else { *s }).collect();
+                }
                 // Side is an overlay over dirt in Bedrock packs.
                 if let Some(d) = p.face("dirt", Face::Up, false) {
                     let dirt = tex16(&d);

@@ -72,16 +72,16 @@ impl ViewerState {
         .width(112);
         let styles = pick_list(MapStyle::ALL.to_vec(), Some(self.prefs.style.style), ViewerMsg::Style).text_size(12).width(136);
         let spawn_btn = |s: Option<(i32, i32)>| {
-            button(assets::glyph(Glyph::Spawn, style::fg(), 16.0))
-                .padding(5)
+            button(assets::glyph(Glyph::Spawn, style::fg(), 24.0))
+                .padding(1)
                 .on_press_maybe(s.filter(|_| self.ctl.dim == 0).map(|_| ViewerMsg::GotoSpawn))
                 .style(style::button_style(Btn::Standard))
         };
-        let player_btn = button(assets::glyph(Glyph::Player, style::fg(), 16.0)).padding(5).on_press(ViewerMsg::GotoPlayer).style(style::button_style(Btn::Standard));
+        let player_btn = button(assets::glyph(Glyph::Player, style::fg(), 24.0)).padding(1).on_press(ViewerMsg::GotoPlayer).style(style::button_style(Btn::Standard));
         let goto_row = row![
             text_input("X", &self.goto.0).on_input(ViewerMsg::GotoX).on_submit(ViewerMsg::Goto).size(12).width(74).style(style::input()),
             text_input("Z", &self.goto.1).on_input(ViewerMsg::GotoZ).on_submit(ViewerMsg::Goto).size(12).width(74).style(style::input()),
-            button(assets::glyph(Glyph::Target, style::t().on_accent, 14.0)).padding(6).on_press(ViewerMsg::Goto).style(style::button_style(Btn::Primary)),
+            button(assets::glyph(Glyph::Target, style::t().on_accent, 24.0)).padding(1).on_press(ViewerMsg::Goto).style(style::button_style(Btn::Primary)),
             spawn_btn(spawn),
             player_btn,
         ]
@@ -170,9 +170,10 @@ impl ViewerState {
         maprail::strip(top, vec![maprail::tool(glyph, tip_label, false, Some(msg), Side::Right)])
     }
 
-    fn panel<'a>(&'a self, bookmarks: &'a [Bookmark]) -> Element<'a, ViewerMsg> {
+    fn panel<'a>(&'a self, bookmarks: &'a [Bookmark], tools: Option<Element<'a, ViewerMsg>>) -> Element<'a, ViewerMsg> {
         let Some(tab) = self.prefs.panel() else { return space::vertical().width(0).height(Length::Fill).into() };
         let body: Element<'a, ViewerMsg> = if let Some(b) = self.ext_tab() { b } else { match tab {
+            PanelTab::Tools => tools.unwrap_or_else(|| text("No extension tools available.").size(12).color(style::muted()).into()),
             PanelTab::View => self.view_tab(),
             PanelTab::Style => self.style_tab(),
             PanelTab::Layers => self.layers_tab(),
@@ -188,7 +189,8 @@ impl ViewerState {
         .align_y(Alignment::Center);
         container(column![head, scrollable(column![body].width(Length::Fill).padding(iced::Padding { right: 12.0, ..iced::Padding::ZERO })).height(Length::Fill)].spacing(8))
             .padding([8, 10])
-            .width(262)
+            // Chest menus (9 slots) need a wider panel.
+            .width(if tab == PanelTab::Tools { 372 } else { 262 })
             .height(Length::Fill)
             .style(style::rail())
             .into()
@@ -485,10 +487,16 @@ impl ViewerState {
     }
 
     // --------------------------------------------------------------- view
-    pub fn view<'a>(&'a self, bookmarks: &'a [Bookmark], spawn: Option<(i32, i32)>) -> Element<'a, ViewerMsg> {
+    pub fn view<'a>(&'a self, bookmarks: &'a [Bookmark], spawn: Option<(i32, i32)>, tools: Option<Element<'a, ViewerMsg>>) -> Element<'a, ViewerMsg> {
         let map: Element<'a, ViewerMsg> = match &self.ctl.map {
             Some(_) if self.v3.on => {
-                let status = if self.v3.frame.is_none() {
+                let status = if self.v3.iso.is_some() && !self.v3.iso_blocks {
+                    match self.isot.pending() {
+                        0 if self.isot.tiles.is_empty() => "loading map…".to_string(),
+                        0 => String::new(),
+                        n => format!("rendering {n} tiles…"),
+                    }
+                } else if self.v3.frame.is_none() {
                     "building 3D terrain…".to_string()
                 } else if self.v3.bbuilding {
                     "loading blocks around the camera…".to_string()
@@ -498,8 +506,11 @@ impl ViewerState {
                     String::new()
                 };
                 iced::widget::container(iced::widget::canvas(crate::viewer_3d::Canvas3 {
-                    frame: self.v3.frame.as_ref(),
+                    // Tiled iso draws tiles only: a full-view frame there
+                    // could only be a leftover of another mode.
+                    frame: if self.v3.iso.is_some() && !self.v3.iso_blocks { None } else { self.v3.frame.as_ref() },
                     iso_pan: self.v3.iso_pan,
+                    tiles: if self.v3.iso.is_some() { self.isot.draw_list(self.v3.iso_cam.center_px(self.v3.iso_cam.scale as f64), (self.v3.size.0 as f32, self.v3.size.1 as f32)) } else { Vec::new() },
                     crisp: self.v3.gpu && (self.prefs.render_scale - 1.0).abs() < 0.01,
                     mouse_look: self.prefs.controls == crate::viewer_3d_input::Controls3::MouseLook && self.v3.iso.is_none(),
                     locked: self.v3.locked,
@@ -540,7 +551,7 @@ impl ViewerState {
             self.tool_rail(),
             column![self.nav(spawn), stack![map, hud, menu]].width(Length::Fill).height(Length::Fill),
             self.panel_tab_strip(),
-            self.panel(bookmarks),
+            self.panel(bookmarks, tools),
         ]
         .height(Length::Fill)
         .into()
@@ -559,7 +570,7 @@ fn icon_handle(i: Icon) -> iced::widget::image::Handle {
     let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
     g.entry(i)
         .or_insert_with(|| {
-            let img = omt_art::icon(i);
+            let img = omt_art::icon(i, 48);
             iced::widget::image::Handle::from_rgba(img.w, img.h, img.rgba)
         })
         .clone()

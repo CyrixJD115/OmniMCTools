@@ -1,5 +1,6 @@
-//! `omt-art` — every image OmniMCTools shows is generated here, in code:
-//! noise-based block textures, isometric blocks, pixel icons, a 5×7 pixel
+//! `omt-art` — OmniMCTools' own art: UI icons from the vendored
+//! Pixelarticons set (MIT, `assets/pixelarticons/`), and generated in code:
+//! noise-based block textures, isometric blocks, a 5×7 pixel
 //! font with a title renderer, and seeded pixel-art landscapes. Nothing is
 //! copied from Minecraft's assets; output is deterministic.
 //!
@@ -12,7 +13,7 @@ pub mod font;
 pub mod icons;
 pub mod image;
 pub mod landscape;
-mod map_glyphs;
+mod pxicons;
 
 pub use blocks::{BlockFaces, Material, iso_block, texture};
 pub use font::{TitleStyle, pixel_text, text_width, title};

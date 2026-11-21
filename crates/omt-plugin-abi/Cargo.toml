@@ -1,0 +1,14 @@
+[package]
+name = "omt-plugin-abi"
+description = "Wire protocol shared by OmniMCTools, its native-plugin SDK (omt-plugin) and loader (omt-nativehost): manifest, UI nodes, events, host-call requests. Serde only; no unsafe."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

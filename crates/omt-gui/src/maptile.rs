@@ -5,6 +5,7 @@
 
 use iced::widget::image::Handle;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use omt_render::{MAX_LEVEL, TileImage, TileKey};
 use omt_render::style::StyleParams;
@@ -16,18 +17,23 @@ pub struct TileData {
     pub handle: Option<Handle>,
     pub px: u32,
     pub stride: i32,
-    pub(crate) surface: Vec<u16>,
-    pub(crate) heights: Vec<i16>,
+    pub(crate) surface: Arc<Vec<u16>>,
+    pub(crate) heights: Arc<Vec<i16>>,
     pub(crate) biomes: Vec<u16>,
-    pub(crate) names: Vec<String>,
+    pub(crate) names: Arc<Vec<String>>,
+    /// Lowest / highest surface of the tile (`None` = empty).
+    pub(crate) hrange: Option<(i16, i16)>,
     /// Unstyled colors, kept when a style post-process is active so the
     /// style can change without re-reading the world.
     base: Option<Vec<u8>>,
     /// Styled colors (kept with `base`; the textured view samples them).
-    styled: Option<Vec<u8>>,
+    styled: Option<Arc<Vec<u8>>>,
     span_blocks: i64,
     pub bytes: usize,
     pub errors: usize,
+    /// Style the colors were lit with (tiles are styled on the worker
+    /// thread; a style change in the meantime re-lights on insert).
+    pub(crate) post: Option<StyleParams>,
 }
 
 impl TileData {
@@ -46,7 +52,23 @@ impl TileData {
             Some((b, s)) => (Some(b), Some(s)),
             None => (None, None),
         };
-        Self { handle, px: t.px, stride: t.stride, surface: t.surface, heights: t.heights, biomes: t.biomes, names: t.names, base, styled, span_blocks, bytes, errors: t.stats.errors }
+        let hrange = t.heights.iter().filter(|&&h| h != i16::MIN).fold(None, |r: Option<(i16, i16)>, &h| Some(r.map_or((h, h), |(l, hi)| (l.min(h), hi.max(h)))));
+        Self {
+            handle,
+            px: t.px,
+            stride: t.stride,
+            surface: Arc::new(t.surface),
+            heights: Arc::new(t.heights),
+            biomes: t.biomes,
+            names: Arc::new(t.names),
+            hrange,
+            base,
+            styled: styled.map(Arc::new),
+            span_blocks,
+            bytes,
+            errors: t.stats.errors,
+            post: post.copied(),
+        }
     }
 
     /// Surface block name + styled color of a pixel (textured view).
@@ -63,7 +85,8 @@ impl TileData {
         if let Some(base) = &self.base {
             let styled = style_rgba(self.px, self.span_blocks, base, &self.heights, &self.surface, &self.biomes, &self.names, p);
             self.handle = Some(Handle::from_rgba(self.px, self.px, styled.clone()));
-            self.styled = Some(styled);
+            self.styled = Some(Arc::new(styled));
+            self.post = Some(*p);
         }
     }
 
@@ -87,20 +110,32 @@ impl TileData {
         }
     }
 
-    /// Heights + styled colors, cloned (3D view snapshot).
-    pub fn field(&self) -> Option<(Vec<i16>, Vec<u8>)> {
-        Some((self.heights.clone(), self.styled.clone()?))
+    /// Shared heights + styled colors + surface names (3D / isometric
+    /// snapshot: reference counts only, no pixel copies).
+    pub fn field(&self) -> Option<Field> {
+        Some(Field { px: self.px, heights: Arc::clone(&self.heights), styled: Arc::clone(self.styled.as_ref()?), surface: Arc::clone(&self.surface), names: Arc::clone(&self.names), hrange: self.hrange })
     }
 
     /// Styled RGBA of this tile (export).
     pub fn pixels(&self) -> Option<(u32, Vec<u8>)> {
-        Some((self.px, self.styled.clone()?))
+        Some((self.px, self.styled.as_deref()?.clone()))
     }
 
     /// Whether this tile shows less than full detail (sampled chunks).
     pub fn reduced(&self) -> bool {
         self.stride > 1
     }
+}
+
+/// A loaded tile's surface data, shared with background renderers.
+#[derive(Debug, Clone)]
+pub struct Field {
+    pub px: u32,
+    pub heights: Arc<Vec<i16>>,
+    pub styled: Arc<Vec<u8>>,
+    pub surface: Arc<Vec<u16>>,
+    pub names: Arc<Vec<String>>,
+    pub hrange: Option<(i16, i16)>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -143,7 +178,7 @@ impl crate::mapdata::MapData {
                 continue;
             }
             let mut local: HashMap<u16, usize> = HashMap::new();
-            for &s in &t.surface {
+            for &s in t.surface.iter() {
                 if s != u16::MAX {
                     *local.entry(s).or_default() += 1;
                 }

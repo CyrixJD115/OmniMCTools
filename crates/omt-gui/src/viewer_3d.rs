@@ -17,39 +17,135 @@ use omt_render::TileKey;
 use omt_render::voxel::{Cam3, Grid};
 
 use crate::mapdata::MapData;
+use crate::maptile::Field;
 use crate::viewer_3d_input::Key3;
 
-/// Copy of the loaded tiles' heights + styled colors (thread-safe).
+/// The loaded tiles' heights + styled colors + surface names, shared by
+/// reference (building one only bumps reference counts — cheap enough for
+/// the UI thread).
 pub struct Snapshot {
-    tiles: HashMap<TileKey, (u32, Vec<i16>, Vec<u8>)>,
-    /// Interned surface block names (per finest tile, one table).
-    names: Vec<String>,
-    surfaces: HashMap<TileKey, Vec<u16>>,
+    tiles: HashMap<TileKey, Field>,
+    /// Every loaded map tile, empty ones included.
+    present: std::collections::HashSet<TileKey>,
+    /// Surface height range over every loaded tile.
+    pub low: f32,
+    pub high: f32,
 }
 
 impl Snapshot {
     pub fn of(map: &MapData) -> Self {
-        let mut names: Vec<String> = Vec::new();
-        let mut intern: HashMap<String, u16> = HashMap::new();
-        let mut id = |n: &str| -> u16 {
-            *intern.entry(n.to_string()).or_insert_with(|| {
-                names.push(n.to_string());
-                (names.len() - 1) as u16
-            })
-        };
-        let mut tiles = HashMap::new();
-        let mut surfaces = HashMap::new();
-        for (k, t, h, c) in map.tiles.iter().filter_map(|(k, t)| t.field().map(|(h, c)| (*k, t, h, c))).filter(|(_, t, _, _)| t.px > 0) {
-            tiles.insert(k, (t.px, h, c));
-            if !t.surface.is_empty() && !t.names.is_empty() {
-                surfaces.insert(k, t.surface.iter().map(|&s| id(t.names.get(s as usize).map(String::as_str).unwrap_or(""))).collect());
-            }
-        }
-        Self { tiles, names, surfaces }
+        let tiles: HashMap<TileKey, Field> = map.tiles.iter().filter(|(_, t)| t.px > 0).filter_map(|(k, t)| Some((*k, t.field()?))).collect();
+        let (low, high) = tiles.values().filter_map(|f| f.hrange).fold((i16::MAX, i16::MIN), |(l, h), (a, b)| (l.min(a), h.max(b)));
+        let (low, high) = if low > high { (0.0, 128.0) } else { (low as f32, high as f32) };
+        Self { tiles, present: map.tiles.keys().copied().collect(), low, high }
     }
 
     pub fn is_empty(&self) -> bool {
         self.tiles.is_empty()
+    }
+
+    /// Whether a map tile had finished loading when the snapshot was taken.
+    pub fn has(&self, key: &TileKey) -> bool {
+        self.present.contains(key)
+    }
+
+    /// Surface height range of the loaded map tiles overlapping a block
+    /// box (`None` = nothing loaded there).
+    pub fn range_in(&self, (x0, z0, x1, z1): (f64, f64, f64, f64)) -> Option<(f32, f32)> {
+        let mut r: Option<(i16, i16)> = None;
+        for (k, f) in &self.tiles {
+            let (a, b, c, d) = k.chunk_rect();
+            let (bx0, bz0, bx1, bz1) = (a as f64 * 16.0, b as f64 * 16.0, (c + 1) as f64 * 16.0, (d + 1) as f64 * 16.0);
+            if bx1 < x0 || bx0 > x1 || bz1 < z0 || bz0 > z1 {
+                continue;
+            }
+            if let Some((l, h)) = f.hrange {
+                r = Some(r.map_or((l, h), |(rl, rh)| (rl.min(l), rh.max(h))));
+            }
+        }
+        r.map(|(l, h)| (l as f32, h as f32))
+    }
+
+    /// The finest loaded map tile holding chunk (`cx`, `cz`).
+    fn finest(&self, cx: i32, cz: i32) -> Option<(TileKey, &Field)> {
+        (0..=omt_render::MAX_LEVEL).find_map(|level| {
+            let key = TileKey::containing(level, cx, cz);
+            self.tiles.get(&key).map(|f| (key, f))
+        })
+    }
+
+    /// The grid of an isometric tile, sampled row by row: inside one row,
+    /// a map tile is resolved once per 512-block run (tiles nest, so the
+    /// finest tile is the same for the whole run), and cells that cannot
+    /// reach the tile are skipped. `kind` maps a surface name to a look id
+    /// (textured detail; `None` = flat colors).
+    pub fn iso_grid(&self, spec: &omt_render::iso::TileSpec, kind: Option<&(dyn Fn(&str) -> u16 + Sync)>) -> Grid {
+        use rayon::prelude::*;
+        let c = spec.cell();
+        let (x0, z0, x1, z1) = spec.grid_box();
+        let n = (((x1 - x0).max(z1 - z0) / c).ceil() as usize).max(1);
+        let span0 = TileKey::new(0, 0, 0).span_blocks();
+        type Row = (Vec<f32>, Vec<[u8; 3]>, Vec<u16>);
+        let rows: Vec<Row> = (0..n)
+            .into_par_iter()
+            .map(|r| {
+                let mut h = vec![f32::NAN; n];
+                let mut col = vec![[0u8; 3]; n];
+                let mut kid = vec![omt_render::voxel::NO_KIND; n];
+                let z = z0 + (r as f64 + 0.5) * c;
+                let bz = z.floor() as i64;
+                let cz = bz.div_euclid(16) as i32;
+                // (level-0 tile column, resolved tile) of the current run.
+                let mut run: Option<(i64, Option<(TileKey, &Field)>)> = None;
+                // Per-row kind cache: (tile, surface index) → look id.
+                let mut kinds: HashMap<(TileKey, u16), u16> = HashMap::new();
+                for q in 0..n {
+                    let x = x0 + (q as f64 + 0.5) * c;
+                    if !spec.reaches(x, z) {
+                        continue;
+                    }
+                    let bx = x.floor() as i64;
+                    let t0 = bx.div_euclid(span0);
+                    let tile = match run {
+                        Some((t, tile)) if t == t0 => tile,
+                        _ => {
+                            let tile = self.finest(bx.div_euclid(16) as i32, cz);
+                            run = Some((t0, tile));
+                            tile
+                        }
+                    };
+                    let Some((key, f)) = tile else { continue };
+                    let px = f.px as i64;
+                    let bpp = key.span_blocks() / px;
+                    let (tx0, tz0, _, _) = key.chunk_rect();
+                    let lx = (bx - tx0 as i64 * 16).div_euclid(bpp);
+                    let lz = (bz - tz0 as i64 * 16).div_euclid(bpp);
+                    if lx < 0 || lz < 0 || lx >= px || lz >= px {
+                        continue;
+                    }
+                    let i = (lz * px + lx) as usize;
+                    let hh = f.heights[i];
+                    if hh == i16::MIN || f.styled[i * 4 + 3] == 0 {
+                        continue;
+                    }
+                    h[q] = hh as f32;
+                    col[q] = [f.styled[i * 4], f.styled[i * 4 + 1], f.styled[i * 4 + 2]];
+                    if let (Some(kind), Some(&sid)) = (kind, f.surface.get(i)) {
+                        kid[q] = *kinds.entry((key, sid)).or_insert_with(|| f.names.get(sid as usize).map_or(omt_render::voxel::NO_KIND, |nm| kind(nm)));
+                    }
+                }
+                (h, col, kid)
+            })
+            .collect();
+        let mut height = Vec::with_capacity(n * n);
+        let mut color = Vec::with_capacity(n * n);
+        let mut kind_v = Vec::with_capacity(n * n);
+        for (h, c, k) in rows {
+            height.extend(h);
+            color.extend(c);
+            kind_v.extend(k);
+        }
+        Grid { x0, z0, cell: c, n, height, color, kind: kind_v, kinds: Vec::new() }
     }
 
     /// Height + color at a block from the finest loaded tile.
@@ -57,27 +153,29 @@ impl Snapshot {
         self.sample_full(x, z).map(|(h, c, _)| (h, c))
     }
 
-    /// [`Sample::sample`](Self::sample) plus the surface block's name, when
-    /// the finest tile carrying it is loaded (textured iso).
+    /// [`Snapshot::sample`] plus the surface block's name, when the finest
+    /// tile carrying it has one (textured iso).
     pub fn sample_full(&self, x: f64, z: f64) -> Option<(f32, [u8; 3], Option<&str>)> {
         let (bx, bz) = (x.floor() as i64, z.floor() as i64);
         let (cx, cz) = (bx.div_euclid(16) as i32, bz.div_euclid(16) as i32);
         for level in 0..=omt_render::MAX_LEVEL {
             let key = TileKey::containing(level, cx, cz);
-            let Some((px, h, c)) = self.tiles.get(&key) else { continue };
-            let bpp = key.span_blocks() / *px as i64;
+            let Some(f) = self.tiles.get(&key) else { continue };
+            let px = f.px as i64;
+            let bpp = key.span_blocks() / px;
             let (x0, z0, _, _) = key.chunk_rect();
             let lx = (bx - x0 as i64 * 16).div_euclid(bpp);
             let lz = (bz - z0 as i64 * 16).div_euclid(bpp);
-            if lx < 0 || lz < 0 || lx >= *px as i64 || lz >= *px as i64 {
+            if lx < 0 || lz < 0 || lx >= px || lz >= px {
                 continue;
             }
-            let i = (lz * *px as i64 + lx) as usize;
-            let hh = *h.get(i)?;
+            let i = (lz * px + lx) as usize;
+            let hh = *f.heights.get(i)?;
+            let c = &f.styled;
             if hh == i16::MIN || c.get(i * 4 + 3).copied().unwrap_or(0) == 0 {
                 return None;
             }
-            let name = self.surfaces.get(&key).and_then(|s| s.get(i).copied()).and_then(|id| self.names.get(id as usize)).map(String::as_str);
+            let name = f.surface.get(i).and_then(|&s| f.names.get(s as usize)).map(String::as_str);
             return Some((hh as f32, [c[i * 4], c[i * 4 + 1], c[i * 4 + 2]], name));
         }
         None
@@ -152,6 +250,12 @@ pub struct View3 {
     /// rendered: during a pan the frame is drawn shifted by this, and the
     /// next full render (on release / big offset) resets it.
     pub iso_pan: (f32, f32),
+    /// `iso_pan` when the frame in flight was requested (subtracted when
+    /// it arrives, so drags during a render are not lost).
+    pub iso_pan_sent: (f32, f32),
+    /// View generation: bumped whenever what the canvas shows changes kind
+    /// (mode, iso angle / detail); frames of older generations are dropped.
+    pub frame_gen: u64,
 }
 
 /// A GPU block mesh (messages need `Debug`).
@@ -165,6 +269,16 @@ impl std::fmt::Debug for GpuBlocks {
 }
 
 impl View3 {
+    /// Drop the shown frame (and its upload) and any drag offset: the next
+    /// frame starts clean, results still in flight are discarded.
+    pub fn clear_frame(&mut self) {
+        self.frame_gen += 1;
+        self.frame = None;
+        self.alloc = None;
+        self.iso_pan = (0.0, 0.0);
+        self.iso_pan_sent = (0.0, 0.0);
+    }
+
     /// Turn the heading, kept in 0..2π.
     pub fn yaw_add(&mut self, d: f32) {
         self.cam.yaw = (self.cam.yaw + d).rem_euclid(std::f32::consts::TAU);
@@ -203,6 +317,8 @@ pub enum Ev3 {
     Look { dx: f32, dy: f32 },
     Move { dx: f32, dy: f32 },
     Altitude(f32),
+    /// Isometric wheel zoom at the cursor (fractions of the canvas).
+    Zoom { y: f32, fx: f32, fy: f32 },
     KeyDown(crate::viewer_3d_input::Key3),
     KeyUp(crate::viewer_3d_input::Key3),
     /// Capture / release the mouse (Mouse look).
@@ -231,6 +347,8 @@ pub struct Canvas3<'a, M> {
     /// Iso drag offset: the shown frame is drawn shifted by this while a
     /// fresh render is pending (keeps panning glued to the cursor).
     pub iso_pan: (f32, f32),
+    /// Isometric screen tiles: `(x, y, edge, image)` in canvas pixels.
+    pub tiles: Vec<(f32, f32, f32, Handle)>,
     pub status: String,
     pub on_event: Box<dyn Fn(Ev3) -> M + 'a>,
 }
@@ -351,7 +469,10 @@ impl<M> canvas::Program<M> for Canvas3<'_, M> {
                 publish(if moving { Ev3::Move { dx, dy } } else { Ev3::Look { dx, dy } })
             }
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                cursor.position_in(bounds)?;
+                let p = cursor.position_in(bounds)?;
+                if self.iso {
+                    return publish(Ev3::Zoom { y: wheel(delta), fx: p.x / bounds.width.max(1.0), fy: p.y / bounds.height.max(1.0) });
+                }
                 publish(Ev3::Altitude(wheel(delta)))
             }
             _ => None,
@@ -362,6 +483,14 @@ impl<M> canvas::Program<M> for Canvas3<'_, M> {
         let size = bounds.size();
         let mut f = Frame::new(renderer, size);
         f.fill_rectangle(Point::ORIGIN, size, crate::style::t().map_bg);
+        for (x, y, edge, h) in &self.tiles {
+            let mut img = canvas::Image::new(h.clone());
+            // Tiles at their native size stay crisp; scaled fallbacks blend.
+            img.filter_method = if (*edge - crate::viewer_isotiles::TILE).abs() < 0.01 && self.crisp { iced::widget::image::FilterMethod::Nearest } else { iced::widget::image::FilterMethod::Linear };
+            // A hair of overlap hides sub-pixel seams of scaled tiles.
+            let pad = if (*edge - crate::viewer_isotiles::TILE).abs() < 0.01 { 0.0 } else { 0.5 };
+            f.draw_image(Rectangle::new(Point::new(*x, *y), Size::new(edge + pad, edge + pad)), img);
+        }
         if let Some(h) = self.frame {
             let mut img = canvas::Image::new(h.clone());
             img.filter_method = if self.crisp { iced::widget::image::FilterMethod::Nearest } else { iced::widget::image::FilterMethod::Linear };

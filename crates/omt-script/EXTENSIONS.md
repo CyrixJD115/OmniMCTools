@@ -1,5 +1,11 @@
 # OMT extensions (Lua)
 
+> **Tools, NBT actions, Map Viewer panels and the `omt` library (worlds,
+> NBT files, items, JSON, storage…)** are documented in
+> [`crates/omt-extensions/EXTENSIONS.md`](../omt-extensions/EXTENSIONS.md).
+> This page covers the package format, the NBT-editor style protocol and the
+> tag API they all share.
+
 OMT's extension system runs Lua 5.4 packages that decorate the NBT editor —
 extra annotations on rows, descriptions, colors, and (careful) tree edits.
 The protocol mirrors the behavior of UMT's extension bootstrap so
@@ -75,7 +81,7 @@ they never abort the walk or the editor.
 |---|---|
 | `BASE_PATH` | directory containing all installed extensions (yours: `BASE_PATH/<id>/`) |
 | `TYPE` | NBT type ids: `UNDEFINED BYTE SHORT INT LONG FLOAT DOUBLE BYTE_ARRAY STRING LIST COMPOUND INT_ARRAY LONG_ARRAY` (0–12) |
-| `EXTENSION_TYPE` | `{ NONE, NBT_EDITOR_STYLE }` |
+| `EXTENSION_TYPE` | `{ NONE, NBT_EDITOR_STYLE, TOOL, NBT_ACTION }` |
 | `FILE_TYPE` | bit flags: `CHUNK MAP PLAYER LEVEL GENERIC` — test with `context.type & FILE_TYPE.LEVEL` |
 | `EDITION` | `{ JAVA, BEDROCK }` (numeric) |
 | `logger` | `logger:info/warn/error(msg)` → the run log (also shown in the editor status) |

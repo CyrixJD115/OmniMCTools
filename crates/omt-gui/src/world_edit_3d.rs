@@ -182,7 +182,7 @@ impl EditorState {
                 let k = p.dist as f64 / 300.0;
                 pan(p, dy as f64 * k, -dx as f64 * k);
             }
-            Ev3::Altitude(y) => p.dist = (p.dist * if y > 0.0 { 0.85 } else { 1.18 }).clamp(6.0, 220.0),
+            Ev3::Altitude(y) | Ev3::Zoom { y, .. } => p.dist = (p.dist * if y > 0.0 { 0.85 } else { 1.18 }).clamp(6.0, 220.0),
             Ev3::KeyDown(k) => {
                 use crate::viewer_3d_input::Key3;
                 match k {

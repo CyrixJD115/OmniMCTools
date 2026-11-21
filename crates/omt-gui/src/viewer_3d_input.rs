@@ -141,6 +141,11 @@ impl ViewerState {
 
     /// Per-frame tick while keys are held or the mouse is captured.
     pub fn subscription(&self) -> Subscription<ViewerMsg> {
+        if self.v3.iso.is_some() && self.isot.drag_step().is_some() {
+            // Synthetic 60 Hz drag (`OMT_DEBUG_ISO_DRAG`): ticks become
+            // drag steps in `iso_input`.
+            return iced::time::every(Duration::from_millis(16)).map(|_| ViewerMsg::Ev3(Ev3::Tick));
+        }
         if self.v3.on && (self.v3.locked || self.v3.held.moving()) {
             iced::time::every(Duration::from_millis(16)).map(|_| ViewerMsg::Ev3(Ev3::Tick))
         } else {
@@ -158,7 +163,7 @@ impl ViewerState {
         match e {
             Ev3::Look { dx, dy } => self.turn(dx, dy, DRAG_LOOK),
             Ev3::Move { dx, dy } => self.v3.cam.walk(dy as f64 * speed * 2.0, -dx as f64 * speed * 2.0),
-            Ev3::Altitude(y) => {
+            Ev3::Altitude(y) | Ev3::Zoom { y, .. } => {
                 if self.v3.locked {
                     // Mouse look: the wheel sets the fly speed.
                     self.prefs.fly_speed = (self.prefs.fly_speed * if y > 0.0 { 1.2 } else { 1.0 / 1.2 }).clamp(2.0, 400.0);
@@ -219,7 +224,7 @@ impl ViewerState {
                 self.v3.size = (s.width.max(32.0) as usize, s.height.max(24.0) as usize);
                 self.sync_pitch();
                 // The window may have moved to a screen with another scale.
-                return Task::batch([crate::viewer_3d_ctl::fetch_dpi(), self.request_frame()]);
+                return Task::batch([crate::viewer_3d_ctl::fetch_dpi(), self.request_frame(), self.iso_pump(store)]);
             }
         }
         self.clamp_height();

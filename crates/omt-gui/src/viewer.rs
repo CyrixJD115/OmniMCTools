@@ -66,7 +66,13 @@ pub enum ViewerMsg {
     Grid3(Arc<omt_render::voxel::Grid>, Option<crate::viewer_3d::GpuMesh>),
     Gpu3(bool),
     /// A rendered 3D frame, already uploaded (drawn without a blank frame).
-    Frame3(iced::widget::image::Handle, Option<iced::widget::image::Allocation>),
+    /// Carries the view generation it was requested in (stale ones drop).
+    Frame3(u64, iced::widget::image::Handle, Option<iced::widget::image::Allocation>),
+    /// An app message from embedded content (the extension tools panel);
+    /// the app handles it before the viewer sees it.
+    Host(Box<crate::Message>),
+    /// A rendered isometric tile, already uploaded.
+    IsoTile(crate::viewer_isotiles::TileDone, Option<iced::widget::image::Allocation>),
     /// The window's scale factor (physical pixels per logical pixel).
     Dpi3(f32),
     /// 3D render resolution (fraction of native).
@@ -128,11 +134,15 @@ pub struct ViewerState {
     pub tex: crate::viewer_tex::TexLayer,
     /// 3D terrain view.
     pub v3: crate::viewer_3d::View3,
+    /// Isometric screen tiles (streamed).
+    pub isot: crate::viewer_isotiles::IsoTiles,
     /// Loaded tiles were re-lit: the 3D grid must be rebuilt.
     regrid: bool,
     /// Debug/testing hook (`OMT_DEBUG_VIEWER_3D=1|blocks[@x,z]`): enter
     /// 3D (optionally block detail at a position) once loaded.
     debug3d: Option<String>,
+    /// `OMT_DEBUG_VIEWER_THEN` already applied.
+    debug_then_done: bool,
     /// Debug/testing hook (`OMT_DEBUG_VIEWER_MENU=1`): keep the Tools menu
     /// pinned open (for headless screenshots).
     debug_menu: bool,
@@ -180,8 +190,10 @@ impl ViewerState {
             bedrock: sess.edition() == omt_world::Edition::Bedrock,
             tex: Default::default(),
             v3: crate::viewer_3d::View3 { gpu: true, ..Default::default() },
+            isot: Default::default(),
             regrid: false,
             debug3d: std::env::var("OMT_DEBUG_VIEWER_3D").ok(),
+            debug_then_done: false,
             debug_menu: std::env::var("OMT_DEBUG_VIEWER_MENU").is_ok(),
             legend: Vec::new(),
             legend_tiles: usize::MAX,
@@ -311,7 +323,9 @@ impl ViewerState {
                 | ViewerMsg::TexCell(_, _, _)
                 | ViewerMsg::Markers(_)
                 | ViewerMsg::Entities(_, _)
-                | ViewerMsg::Frame3(_, _)
+                | ViewerMsg::Frame3(_, _, _)
+                | ViewerMsg::Host(_)
+                | ViewerMsg::IsoTile(_, _)
                 | ViewerMsg::Grid3(_, _)
                 | ViewerMsg::BGrid(_)
                 | ViewerMsg::Dpi3(_)
@@ -326,7 +340,17 @@ impl ViewerState {
         let store = sess.store.as_ref();
         let task = match m {
             ViewerMsg::Tiles(t) => {
+                let arrived = match &t {
+                    crate::mapdata::MapMsg::Tile(_, key, Ok(Some(_))) => Some(*key),
+                    _ => None,
+                };
                 let t = self.ctl.on_msg(t, store).map(ViewerMsg::Tiles);
+                if self.v3.iso.is_some() {
+                    if let Some(key) = arrived {
+                        self.isot.map_tile(key);
+                    }
+                    return Task::batch([t, self.iso_pump(store)]);
+                }
                 self.regrid |= self.v3.on;
                 if self.ctl.map.is_some()
                     && let Some(spec) = self.debug3d.take()
@@ -359,22 +383,16 @@ impl ViewerState {
                 t
             }
             ViewerMsg::Mode3D(on) if on && self.v3.iso.is_some() => {
-                // Iso → perspective 3D: same grid, perspective camera.
-                self.v3.iso = None;
-                self.request_grid()
+                // Iso → perspective 3D around the same centre.
+                self.leave_iso();
+                self.recenter_3d(store)
             }
             ViewerMsg::Mode3D(on) => self.set_3d(on, store),
             ViewerMsg::Iso(rot) => self.set_iso(rot, store),
             ViewerMsg::IsoDetail(d) => self.set_iso_detail(d, store),
             ViewerMsg::IsoTextured(on) => {
-                if self.v3.iso_textured != on {
-                    self.v3.iso_textured = on;
-                    self.v3.iso_pan = (0.0, 0.0);
-                    // The grid may predate the flag: rebuild it for the
-                    // surface looks, then render.
-                    return Task::batch([self.recenter_3d(store), self.request_frame()]);
-                }
-                Task::none()
+                self.v3.iso_textured = on;
+                self.iso_pump(store)
             }
             ViewerMsg::Ev3(e) => self.on_ev3(e, store),
             ViewerMsg::Grid3(g, m) => self.on_grid(g, m),
@@ -387,7 +405,20 @@ impl ViewerState {
                 }
                 Task::none()
             }
-            ViewerMsg::Frame3(h, a) => self.on_frame(h, a),
+            ViewerMsg::Frame3(g, h, a) => {
+                let t = self.on_frame(g, h, a);
+                // Debug/testing hook (`OMT_DEBUG_VIEWER_THEN=iso<rot>`): after the
+                // first 3D frame, switch to isometric (mode-switch tests).
+                if let Some(rot) = std::env::var("OMT_DEBUG_VIEWER_THEN").ok().and_then(|v| v.strip_prefix("iso").and_then(|r| r.parse().ok()))
+                    && !std::mem::replace(&mut self.debug_then_done, true)
+                {
+                    return Task::batch([t, self.set_iso(Some(rot), store)]);
+                }
+                t
+            }
+            ViewerMsg::IsoTile(d, a) => self.on_iso_tile(d, a, store),
+            // Routed by the app before it reaches the viewer.
+            ViewerMsg::Host(_) => Task::none(),
             ViewerMsg::Dpi3(f) => {
                 if (f - self.v3.dpi).abs() < 0.001 {
                     return Task::none();
@@ -397,7 +428,7 @@ impl ViewerState {
             }
             ViewerMsg::Quality3(q) => {
                 self.prefs.render_scale = q;
-                self.request_frame()
+                Task::batch([self.request_frame(), self.iso_pump(store)])
             }
             ViewerMsg::Controls3(c) => {
                 self.capture(false);
@@ -692,7 +723,15 @@ impl ViewerState {
             self.legend_tiles = map.tiles.len();
             self.legend = map.biome_legend();
         }
-        let regrid = if std::mem::take(&mut self.regrid) && self.v3.on { self.request_grid() } else { Task::none() };
+        let regrid = match (std::mem::take(&mut self.regrid) && self.v3.on, self.v3.iso.is_some()) {
+            (true, true) => {
+                // Re-lit map: every iso tile re-renders (old ones stay up).
+                self.isot.invalidate();
+                self.iso_pump(store)
+            }
+            (true, false) => self.request_grid(),
+            _ => Task::none(),
+        };
         let ents = self.plan_entities(store);
         self.refresh_legends();
         let hl = self.plan_highlights(store);
@@ -788,6 +827,11 @@ impl ViewerState {
                 Task::none()
             }
             MapEvent::Press { at, right: false, .. } if self.prefs.panel() == Some(PanelTab::Inspect) && self.ext.inspect.click_select => self.inspect_click(store, at).unwrap_or_else(Task::none),
+            // The extension tools panel is open: the click goes to its tool.
+            MapEvent::Press { at, right: false, .. } if self.prefs.panel() == Some(PanelTab::Tools) => {
+                let (x, z) = (at.0.floor() as i32, at.1.floor() as i32);
+                Task::done(ViewerMsg::Host(Box::new(crate::Message::ExtTool(crate::ext_tools::ExtToolMsg::MapClick(self.origin.clone(), x, z, self.ctl.dim)))))
+            }
             MapEvent::Press { at, right: false, .. } => {
                 // Left click fills the go-to fields (copy coordinates) and
                 // starts a measurement (kept only if the pointer moves).

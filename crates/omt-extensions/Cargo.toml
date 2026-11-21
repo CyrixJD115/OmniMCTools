@@ -1,0 +1,19 @@
+[package]
+name = "omt-extensions"
+description = "Extension platform for OmniMCTools: tool tabs with declarative UI, NBT actions, world / NBT / item APIs for Lua extensions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+omt-nbt.workspace = true
+omt-world.workspace = true
+omt-script.workspace = true
+omt-plugin-abi.workspace = true
+mlua = { version = "0.11", features = ["lua54", "vendored", "serde"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
