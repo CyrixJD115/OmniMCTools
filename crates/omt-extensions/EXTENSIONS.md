@@ -110,6 +110,9 @@ Every constructor takes a table; children go in the array part (or
 | `ui.chest{ id, title, rows, cols, items, selected }` | a Minecraft container with item icons, counts, glint and tooltips; `items` as returned by `omt.items.read` / `world:containers` (or `{ slot, id, count, label, lore, glint }`) | `slot` — `ev.slot` |
 | `ui.block{ name, size }` | a block icon from the active textures | — |
 | `ui.progress{ value = 0..1, label }` | | — |
+| `ui.badge{ text, color }` | a small coloured pill | — |
+| `ui.image{ path, size }` | an image file (PNG/JPG…) | — |
+| `ui.number{ id, value, min, max, step }` | numeric field with − / + steppers | `input` / `submit` — `ev.value` |
 
 Every event is `{ kind = …, id = <node id>, … }`. Map Viewer clicks (tools
 with `map = true`, panel open) arrive as `{ kind = "map_click", x, z, dim }`
@@ -158,6 +161,8 @@ A world `w` has `w.name`, `w.path`, `w.edition` (`"JAVA"`/`"BEDROCK"`),
 | `w:chunks(dim)` | `{ {x, z}, … }` chunk coordinates present |
 | `w:chunk(dim, cx, cz)` | `{ x, z, data_version, inhabited_time, status, block_entities = {…}, entities = {tag…} }` or `nil` |
 | `w:block(dim, x, y, z)` | `name, { property = value }` |
+| `w:biome(dim, x, y, z)` | biome name (`nil` if unloaded) |
+| `w:height(dim, x, z)` | highest non-air block Y (surface), or `nil` |
 | `w:block_entities(dim, x0, z0, x1, z1, filter)` | `{ {x, y, z, id, kind, tag}, … }`; `filter` = kind substring (`"sign"`) or `function(be) return … end` |
 | `w:containers(dim, x0, z0, x1, z1)` | `{ {x, y, z, kind, rows, cols, items, tag}, … }` — chests, barrels, shulkers, hoppers, furnaces, dispensers… |
 | `w:entities(dim, x0, z0, x1, z1)` | `{ {id, x, y, z, tag}, … }` |
@@ -213,6 +218,10 @@ freely (`list:addChild(omt.items.make{…})` copies across documents).
 | `omt.items.layout(kind)` | `rows, cols` of a container kind (`nil` if not a container) |
 | `omt.items.kind(id)` | normalized container kind (`ShulkerBox` → `shulker_box`) |
 | `omt.items.name(id)` | `minecraft:fire_aspect` → `Fire Aspect` |
+
+### Utilities — `omt.util`
+
+`omt.util.count(items, needle)` · `clamp(v, lo, hi)` · `round(v)` · `title("minecraft:fire_aspect")` → `"Fire Aspect"` · `chunk_of(x, z)` → `cx, cz`.
 
 ### Everything else
 

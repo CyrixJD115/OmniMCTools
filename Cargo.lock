@@ -3156,6 +3156,7 @@ dependencies = [
  "mlua",
  "omt-nbt",
  "omt-plugin-abi",
+ "omt-render",
  "omt-script",
  "omt-world",
  "serde",

@@ -304,6 +304,35 @@ pub fn install(lua: &Lua) -> mlua::Result<()> {
           list:addChild(item)
           return container
         end
+
+        -- Handy utilities (omt.util.*), written with the public API.
+        omt.util = {}
+        -- Total count of items whose id contains `needle` (""=all), including
+        -- nested container contents.
+        function omt.util.count(items, needle)
+          local n = 0
+          for _, it in ipairs(items) do
+            if needle == nil or needle == "" or string.find(it.id, needle, 1, true) then n = n + it.count end
+            for _, inner in ipairs(it.contents or {}) do
+              if needle == nil or needle == "" or string.find(inner.id, needle, 1, true) then n = n + inner.count end
+            end
+          end
+          return n
+        end
+        -- Clamp a number to [lo, hi].
+        function omt.util.clamp(v, lo, hi) if v < lo then return lo elseif v > hi then return hi else return v end end
+        -- Round to the nearest integer.
+        function omt.util.round(v) return math.floor(v + 0.5) end
+        -- "minecraft:fire_aspect" -> "Fire Aspect".
+        function omt.util.title(id)
+          local out = {}
+          for word in string.gmatch(string.gsub(id, "^.*:", ""), "[^_]+") do
+            out[#out + 1] = word:sub(1, 1):upper() .. word:sub(2)
+          end
+          return table.concat(out, " ")
+        end
+        -- Block coordinates -> chunk coordinates.
+        function omt.util.chunk_of(x, z) return math.floor(x / 16), math.floor(z / 16) end
         "#,
     )
     .set_name("omt helpers")

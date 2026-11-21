@@ -71,6 +71,12 @@ pub enum UiNode {
     Progress { value: f32, label: String },
     /// Monospace text block (SNBT, logs, reports).
     Code { text: String },
+    /// A small coloured pill.
+    Badge { text: String, color: Option<(u8, u8, u8)> },
+    /// An image file at `size` px.
+    Image { path: String, size: f32 },
+    /// A numeric field with − / + steppers.
+    Number { id: String, value: f64, min: f64, max: f64, step: f64 },
 }
 
 /// User input sent to a tool's `on_event(self, ev, ctx)`.
@@ -156,11 +162,11 @@ local function node(kind)
   end
 end
 for _, k in ipairs({ "column", "row", "card", "scroll", "text", "heading", "separator", "space", "button",
-                     "input", "toggle", "slider", "select", "table", "chest", "block", "progress", "code" }) do
+                     "input", "toggle", "slider", "select", "table", "chest", "block", "progress", "code", "badge", "image", "number" }) do
   ui[k] = node(k)
 end
 -- ui.text("hello") / ui.heading("Title") / ui.code("...") take a plain string too.
-for _, k in ipairs({ "text", "heading", "code" }) do
+for _, k in ipairs({ "text", "heading", "code", "badge" }) do
   local make = ui[k]
   ui[k] = function(t)
     if type(t) ~= "table" then t = { text = tostring(t) } end
@@ -351,6 +357,12 @@ pub(crate) fn parse(t: &Table, depth: usize) -> mlua::Result<UiNode> {
         "block" => UiNode::Block { name: opt_s(t, "name").unwrap_or_else(|| s(t, "1")), size: num(t, "size").unwrap_or(32.0) as f32 },
         "progress" => UiNode::Progress { value: num(t, "value").unwrap_or(0.0).clamp(0.0, 1.0) as f32, label: s(t, "label") },
         "code" => UiNode::Code { text: opt_s(t, "text").unwrap_or_else(|| s(t, "1")) },
+        "badge" => UiNode::Badge { text: opt_s(t, "text").unwrap_or_else(|| s(t, "1")), color: color(t, "color") },
+        "image" => UiNode::Image { path: opt_s(t, "path").unwrap_or_else(|| s(t, "1")), size: num(t, "size").unwrap_or(64.0) as f32 },
+        "number" => {
+            let (min, max) = (num(t, "min").unwrap_or(f64::MIN), num(t, "max").unwrap_or(f64::MAX));
+            UiNode::Number { value: num(t, "value").unwrap_or(0.0).clamp(min.min(max), max.max(min)), min, max, step: num(t, "step").unwrap_or(1.0), id }
+        }
         other => return Err(mlua::Error::runtime(format!("unknown ui kind {other:?}"))),
     })
 }
@@ -373,12 +385,15 @@ mod tests {
                     ui.table{ id = "list", columns = {"Pos", "Items"}, rows = { {"1 2 3", 4}, {"5 6 7", 0} }, selected = 2 },
                     ui.chest{ id = "c", title = "Chest", items = { { slot = 0, id = "minecraft:diamond", count = 3, enchanted = true } } },
                     ui.text{ text = "red", color = "#ff0000" },
+                    ui.badge{ text = "new", color = {0, 128, 255} },
+                    ui.number{ id = "n", value = 5, min = 0, max = 10, step = 2 },
+                    ui.image{ path = "/tmp/x.png", size = 48 },
                 }"##,
             )
             .eval()
             .unwrap();
         let UiNode::Column { children, .. } = parse_value(&v, 0).unwrap().unwrap() else { panic!() };
-        assert_eq!(children.len(), 6, "nil skipped, string becomes text");
+        assert_eq!(children.len(), 9, "nil skipped, string becomes text");
         assert_eq!(children[0], UiNode::Heading { text: "Chests".into() });
         let UiNode::Row { children: r, .. } = &children[1] else { panic!() };
         assert!(matches!(&r[0], UiNode::Input { id, value, .. } if id == "x" && value == "12"));
@@ -388,6 +403,9 @@ mod tests {
         assert_eq!((*rows, *cols), (3, 9));
         assert!(items[0].glint && items[0].count == 3);
         assert!(matches!(&children[5], UiNode::Text { color: Some((255, 0, 0)), .. }));
+        assert_eq!(children[6], UiNode::Badge { text: "new".into(), color: Some((0, 128, 255)) });
+        assert!(matches!(&children[7], UiNode::Number { id, value, min, max, step } if id == "n" && *value == 5.0 && *min == 0.0 && *max == 10.0 && *step == 2.0));
+        assert!(matches!(&children[8], UiNode::Image { path, size } if path == "/tmp/x.png" && *size == 48.0));
         assert!(parse_value(&lua.load("return { kind = 'nope' }").eval().unwrap(), 0).is_err());
     }
 

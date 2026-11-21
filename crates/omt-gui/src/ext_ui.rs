@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use iced::widget::{button, column, container, mouse_area, pick_list, progress_bar, row, rule, scrollable, slider, space, stack, text, text_input, toggler, tooltip};
+use iced::widget::{button, column, container, image, mouse_area, pick_list, progress_bar, row, rule, scrollable, slider, space, stack, text, text_input, toggler, tooltip};
 use iced::{Alignment, Background, Border, Color, Element, Font, Length};
 use omt_art::Glyph;
 use omt_extensions::{ButtonStyle, ItemSlot, Pick, ToolEvent, UiNode};
@@ -175,7 +175,44 @@ pub fn render<'a>(node: &'a UiNode, c: &Ctx<'a>) -> Element<'a, Message> {
             .max_height(420)
             .style(style::card_flat())
             .into(),
+        UiNode::Badge { text: t, color } => {
+            let c = color.map_or_else(style::accent, |(r, g, b)| Color::from_rgb8(r, g, b));
+            container(text(t.clone()).size(11).color(style::t().on_accent))
+                .padding([2, 8])
+                .style(move |_| container::Style { background: Some(Background::Color(c)), border: iced::border::rounded(8), ..Default::default() })
+                .into()
+        }
+        UiNode::Image { path, size } => {
+            if std::path::Path::new(path).is_file() {
+                image(image::Handle::from_path(path)).width(Length::Fixed(*size)).height(Length::Fixed(*size)).content_fit(iced::ContentFit::Contain).into()
+            } else {
+                container(text("image?").size(11).color(style::hint())).width(Length::Fixed(*size)).height(Length::Fixed(*size)).center(Length::Fixed(*size)).style(style::card_flat()).into()
+            }
+        }
+        UiNode::Number { id, value, min, max, step } => {
+            let shown = c.overrides.get(id).cloned().unwrap_or_else(|| trim_num(*value));
+            let (uid, i1, i2) = (c.uid, id.clone(), id.clone());
+            let field = text_input("", &shown)
+                .on_input(move |v| Message::ExtTool(ExtToolMsg::Typed(uid, i1.clone(), v)))
+                .on_submit(Message::ExtTool(ExtToolMsg::Submit(uid, i2.clone())))
+                .size(12)
+                .padding([5, 8])
+                .width(Length::Fixed(90.0))
+                .style(style::input());
+            let cur: f64 = shown.parse().unwrap_or(*value);
+            let (lo, hi, st) = (*min, *max, *step);
+            let step_btn = |label: &'static str, to: f64| {
+                let v = to.clamp(lo.min(hi), hi.max(lo));
+                button(text(label).size(13)).padding([3, 9]).on_press(ev(c, ToolEvent::Submit { id: id.clone(), value: trim_num(v) })).style(style::button_style(Btn::Standard))
+            };
+            row![step_btn("−", cur - st), field, step_btn("+", cur + st)].spacing(4).align_y(Alignment::Center).into()
+        }
     }
+}
+
+/// Format a number without a trailing `.0` (so steppers read cleanly).
+fn trim_num(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
 
 fn table<'a>(id: &str, columns: &'a [String], rows: &'a [Vec<String>], selected: Option<usize>, height: Option<f32>, c: &Ctx<'a>) -> Element<'a, Message> {

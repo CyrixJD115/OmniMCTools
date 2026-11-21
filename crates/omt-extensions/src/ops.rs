@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use omt_nbt::{NbtDocument, NbtFormat, Tag};
-use omt_plugin_abi::{Container, HostRequest, HostResponse, Item, NamedTag, Rect, WorldInfo};
+use omt_plugin_abi::{Container, EntityInfo, HostRequest, HostResponse, Item, NamedTag, Rect, WorldInfo};
 use omt_world::{Edition, WorldNode};
 
 use crate::runtime::{Effects, Shared, WorldEntry, WorldHandle, WorldOpener};
@@ -202,7 +202,10 @@ pub fn execute(req: &HostRequest, ctx: &mut HostCtx) -> HostResponse {
         },
         HostRequest::Containers { rect } => containers(ctx, *rect),
         HostRequest::BlockEntities { rect, filter } => block_entities(ctx, *rect, filter.as_deref()),
+        HostRequest::Entities { rect, filter } => entities(ctx, *rect, filter.as_deref()),
         HostRequest::Block { dim, x, y, z } => block(ctx, *dim, *x, *y, *z),
+        HostRequest::Biome { dim, x, y, z } => biome(ctx, *dim, *x, *y, *z),
+        HostRequest::Height { dim, x, z } => height(ctx, *dim, *x, *z),
         HostRequest::Players => players(ctx),
         HostRequest::Level => match world(ctx) {
             Ok(h) => HostResponse::Text { value: h.store.read_raw(&WorldNode::LevelDat).ok().and_then(|b| read_doc(&b, "level.dat")).as_ref().map(snbt) },
@@ -409,6 +412,77 @@ fn fill(ctx: &mut HostCtx, dim: u8, a: [i32; 3], b: [i32; 3], block: &str, repla
         },
         Err(e) => e,
     }
+}
+
+fn entities(ctx: &mut HostCtx, rect: Rect, filter: Option<&str>) -> HostResponse {
+    let h = match world(ctx) {
+        Ok(h) => h.clone(),
+        Err(e) => return e,
+    };
+    let chunks = match rect_chunks(&h, rect, &ctx.shared) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let mut out: Vec<EntityInfo> = Vec::new();
+    for c in chunks {
+        for e in &c.entities {
+            let id = match get(e, "id").or_else(|| get(e, "identifier")) {
+                Some(Tag::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            if filter.is_some_and(|f| !id.contains(f)) {
+                continue;
+            }
+            let pos: Vec<f64> = match get(e, "Pos") {
+                Some(Tag::List(l)) => l.iter().filter_map(|v| match v {
+                    Tag::Double(d) => Some(*d),
+                    Tag::Float(f) => Some(f64::from(*f)),
+                    _ => None,
+                }).collect(),
+                _ => Vec::new(),
+            };
+            let [x, y, z] = pos[..] else { continue };
+            if !in_rect((x.floor() as i32, 0, z.floor() as i32), rect) || out.len() >= MAX_RESULTS {
+                continue;
+            }
+            out.push(EntityInfo { id, x, y, z, snbt: snbt(e) });
+        }
+    }
+    HostResponse::Entities { value: out }
+}
+
+fn biome(ctx: &HostCtx, dim: u8, x: i32, y: i32, z: i32) -> HostResponse {
+    let h = match world(ctx) {
+        Ok(h) => h,
+        Err(e) => return e,
+    };
+    let c = match h.store.read_chunk(dim, x.div_euclid(16), z.div_euclid(16)) {
+        Ok(Some(c)) => c,
+        Ok(None) => return HostResponse::Text { value: None },
+        Err(e) => return err(e.to_string()),
+    };
+    let name = omt_render::biome_at(&c, omt_render::Palette::embedded(), x.rem_euclid(16) as usize, y, z.rem_euclid(16) as usize).map(str::to_string);
+    HostResponse::Text { value: name }
+}
+
+fn height(ctx: &HostCtx, dim: u8, x: i32, z: i32) -> HostResponse {
+    let h = match world(ctx) {
+        Ok(h) => h,
+        Err(e) => return e,
+    };
+    let c = match h.store.read_chunk(dim, x.div_euclid(16), z.div_euclid(16)) {
+        Ok(Some(c)) => c,
+        Ok(None) => return HostResponse::Int { value: None },
+        Err(e) => return err(e.to_string()),
+    };
+    let (lo, hi) = match dim {
+        1 => (0, 127),
+        2 => (0, 255),
+        _ => (-64, 319),
+    };
+    let (lx, lz) = (x.rem_euclid(16) as usize, z.rem_euclid(16) as usize);
+    let top = (lo..=hi).rev().find(|&y| c.block_at(lx, y, lz).is_some_and(|b| b.name != "minecraft:air" && !b.name.ends_with(":cave_air") && !b.name.ends_with(":void_air")));
+    HostResponse::Int { value: top.map(i64::from) }
 }
 
 fn nbt_write(path: &str, s: &str, format: &str) -> HostResponse {

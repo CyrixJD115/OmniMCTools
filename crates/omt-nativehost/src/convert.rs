@@ -48,6 +48,9 @@ pub fn node(n: abi::Node) -> UiNode {
         abi::Node::Block { name, size } => UiNode::Block { name, size },
         abi::Node::Progress { value, label } => UiNode::Progress { value, label },
         abi::Node::Code { text } => UiNode::Code { text },
+        abi::Node::Badge { text, color } => UiNode::Badge { text, color },
+        abi::Node::Image { path, size } => UiNode::Image { path, size },
+        abi::Node::Number { id, value, min, max, step } => UiNode::Number { id, value, min, max, step },
     }
 }
 

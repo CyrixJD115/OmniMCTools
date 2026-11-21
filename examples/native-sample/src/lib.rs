@@ -78,7 +78,7 @@ impl Instance for Containers {
         }
     }
 
-    fn view(&mut self, _host: &Host, ctx: &Ctx) -> Node {
+    fn view(&mut self, host: &Host, ctx: &Ctx) -> Node {
         let Some(w) = ctx.world() else {
             return ui::text("Open a world (Map Viewer, NBT Editor…) first.");
         };
@@ -89,7 +89,11 @@ impl Instance for Containers {
             ui::text_styled(format!("{} within 64 of {}, {} — click the map to re-centre", self.rows.len(), self.cx, self.cz), 11.0, Some((0x9a, 0xa0, 0xa6)), false),
             ui::table("list", ["Position".into(), "Container".into(), "Items".into()], rows, Some(self.sel + 1)),
         ];
+        col.push(ui::badge(format!("{} found", self.rows.len()), None));
         if let Some(c) = self.rows.get(self.sel) {
+            let biome = host.biome(self.dim, c.x, c.y, c.z).unwrap_or_else(|| "unknown".into());
+            let surface = host.height(self.dim, c.x, c.z).map_or_else(|| "?".to_string(), |y| y.to_string());
+            col.push(ui::text_styled(format!("biome: {biome} · surface Y: {surface}"), 11.0, Some((0x9a, 0xa0, 0xa6)), false));
             col.push(ui::chest("chest", c.kind.clone(), c.chest_rows, c.cols, c.items.clone()));
             if self.slot.is_some() && w.writable {
                 col.push(ui::button("fill", "Fill the selected slot to 64").into());

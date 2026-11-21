@@ -224,6 +224,12 @@ pub enum Node {
     Block { name: String, size: f32 },
     Progress { value: f32, label: String },
     Code { text: String },
+    /// A small coloured pill (status, counts).
+    Badge { text: String, color: Option<(u8, u8, u8)> },
+    /// An image from a file path (PNG/JPG…), at `size` px.
+    Image { path: String, size: f32 },
+    /// A numeric field with − / + steppers (`Input` live, `Submit` on step).
+    Number { id: String, value: f64, min: f64, max: f64, step: f64 },
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +265,13 @@ pub enum HostRequest {
     Containers { rect: Rect },
     /// Block entities in a box; `filter` = kind substring.
     BlockEntities { rect: Rect, filter: Option<String> },
+    /// Entities (mobs, items, …) in a box; `filter` = id substring.
+    Entities { rect: Rect, filter: Option<String> },
     Block { dim: u8, x: i32, y: i32, z: i32 },
+    /// Biome name at (x, y, z).
+    Biome { dim: u8, x: i32, y: i32, z: i32 },
+    /// Highest non-air block Y in a column (surface), or none.
+    Height { dim: u8, x: i32, z: i32 },
     Players,
     Level,
     Chunks { dim: u8 },
@@ -288,6 +300,8 @@ pub enum HostResponse {
     Json { value: serde_json::Value },
     Containers { value: Vec<Container> },
     BlockEntities { value: Vec<BlockEntity> },
+    Entities { value: Vec<EntityInfo> },
+    Int { value: Option<i64> },
     Block { name: Option<String>, properties: Vec<(String, String)> },
     Tags { value: Vec<NamedTag> },
     Items { value: Vec<Item> },
@@ -323,6 +337,15 @@ pub struct BlockEntity {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamedTag {
     pub id: String,
+    pub snbt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityInfo {
+    pub id: String,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
     pub snbt: String,
 }
 

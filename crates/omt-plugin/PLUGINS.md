@@ -102,7 +102,7 @@ so the loop is: edit → `cargo build` → Reload.
 `.pick`, `.enabled`) · `input(id, value, placeholder)` · `toggle` · `slider` ·
 `select` · `table(id, columns, rows, selected)` (rows 1-based in the `Row`
 event) · `chest(id, title, rows, cols, items)` (a Minecraft container of
-`Item`s) · `block(name, size)` · `progress`.
+`Item`s) · `block(name, size)` · `progress` · `badge(text, color)` · `image(path, size)` · `number(id, value, min, max, step)`.
 
 Events (`on_event`): `Click` `Input` (each key) `Submit` (Enter) `Toggle`
 `Slider` `Select` `Row { row }` `Slot { slot }` `Picked { path }` (from a
@@ -121,6 +121,8 @@ Every callback gets a `&Host` that reaches back into OMT. NBT values are
 | `host.world_list()` | the app's worlds |
 | `host.containers(dim, x0,z0,x1,z1)` | chests/barrels/shulkers/hoppers… with items + layout |
 | `host.block_entities(dim, …, filter)` | block entities by kind substring |
+| `host.entities(dim, x0,z0,x1,z1, filter)` | entities (mobs, items…) with position + tag SNBT |
+| `host.biome(dim, x,y,z)` / `host.height(dim, x,z)` | biome name / surface Y |
 | `host.block(dim, x,y,z)` | `(name, properties)` |
 | `host.players()` / `host.level()` / `host.chunks(dim)` | player tags / level.dat / chunk list |
 | `host.set_block_entity(dim, x,y,z, snbt)` | write a block entity |

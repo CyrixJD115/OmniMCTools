@@ -353,3 +353,39 @@ fn items_put_creates_and_replaces() {
     assert_eq!(out.view, Some(UiNode::Text { text: "2 minecraft:emerald minecraft:stone 1".into(), size: 13.0, color: None, bold: false, mono: false }));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// New world calls (biome / height / entities) and omt.util helpers are
+/// reachable from Lua and render the new UI nodes.
+#[test]
+fn lua_biome_height_entities_and_util() {
+    let (root, h, _) = setup("world-api");
+    std::fs::create_dir_all(root.join("wa")).unwrap();
+    std::fs::write(
+        root.join("wa/main.lua"),
+        r#"return { { type = EXTENSION_TYPE.TOOL, id = "t",
+             init = function(self, ctx)
+               local w = ctx.world
+               self.b = w:biome(0, 4, 64, 4)          -- nil on the empty mock
+               self.h = w:height(0, 4, 4)             -- nil on the empty mock
+               self.e = #w:entities(0, -16, -16, 31, 31)
+               self.title = omt.util.title("minecraft:fire_aspect")
+               self.n = omt.util.count({ { id = "minecraft:diamond", count = 3, contents = {} } }, "dia")
+             end,
+             view = function(self)
+               return ui.column{
+                 ui.text(tostring(self.b) .. " " .. tostring(self.h) .. " " .. self.e .. " " .. self.title .. " " .. self.n),
+                 ui.badge{ text = "ok" },
+                 ui.number{ id = "num", value = 2, min = 0, max = 9, step = 1 },
+               }
+             end } }"#,
+    )
+    .unwrap();
+    let (_host, first) = ToolHost::start(ToolSpec { root: root.clone(), ext: "wa".into(), tool: "t".into(), world: Some(h), ..Default::default() });
+    let out = first.recv().unwrap();
+    assert!(out.error.is_none(), "{:?}", out.error);
+    let Some(UiNode::Column { children, .. }) = out.view else { panic!() };
+    assert_eq!(children[0], UiNode::Text { text: "nil nil 0 Fire Aspect 3".into(), size: 13.0, color: None, bold: false, mono: false });
+    assert!(matches!(&children[1], UiNode::Badge { text, .. } if text == "ok"));
+    assert!(matches!(&children[2], UiNode::Number { id, .. } if id == "num"));
+    let _ = std::fs::remove_dir_all(&root);
+}

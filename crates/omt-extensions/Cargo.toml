@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 omt-nbt.workspace = true
 omt-world.workspace = true
+omt-render.workspace = true
 omt-script.workspace = true
 omt-plugin-abi.workspace = true
 mlua = { version = "0.11", features = ["lua54", "vendored", "serde"] }

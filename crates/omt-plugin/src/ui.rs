@@ -132,3 +132,18 @@ pub fn block(name: impl Into<String>, size: f32) -> Node {
 pub fn progress(value: f32, label: impl Into<String>) -> Node {
     Node::Progress { value, label: label.into() }
 }
+
+/// A small coloured pill (`color` = `Some((r,g,b))`).
+pub fn badge(text: impl Into<String>, color: Option<(u8, u8, u8)>) -> Node {
+    Node::Badge { text: text.into(), color }
+}
+
+/// An image file (PNG/JPG…) at `size` px.
+pub fn image(path: impl Into<String>, size: f32) -> Node {
+    Node::Image { path: path.into(), size }
+}
+
+/// A numeric field with − / + steppers (`Input` live, `Submit` on step).
+pub fn number(id: impl Into<String>, value: f64, min: f64, max: f64, step: f64) -> Node {
+    Node::Number { id: id.into(), value, min, max, step }
+}

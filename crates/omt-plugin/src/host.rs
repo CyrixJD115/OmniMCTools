@@ -6,7 +6,7 @@
 use core::ffi::c_void;
 
 use omt_plugin_abi::ffi;
-use omt_plugin_abi::{BlockEntity, Container, HostRequest, HostResponse, Item, NamedTag, Rect, WorldInfo};
+use omt_plugin_abi::{BlockEntity, Container, EntityInfo, HostRequest, HostResponse, Item, NamedTag, Rect, WorldInfo};
 
 /// Reaches the host. Valid only for the duration of the callback it was
 /// handed to (do not store it).
@@ -131,6 +131,28 @@ impl Host {
             HostResponse::BlockEntities { value } => Ok(value),
             HostResponse::Err { message } => Err(message),
             other => Err(format!("unexpected reply: {other:?}")),
+        }
+    }
+
+    /// Entities (mobs, items, …) in a block box; `filter` = id substring.
+    pub fn entities(&self, dim: u8, x0: i32, z0: i32, x1: i32, z1: i32, filter: Option<&str>) -> Result<Vec<EntityInfo>, String> {
+        match self.request(&HostRequest::Entities { rect: Rect { dim, x0, z0, x1, z1 }, filter: filter.map(str::to_string) }) {
+            HostResponse::Entities { value } => Ok(value),
+            HostResponse::Err { message } => Err(message),
+            other => Err(format!("unexpected reply: {other:?}")),
+        }
+    }
+
+    /// Biome name at (x, y, z); `None` when unloaded.
+    pub fn biome(&self, dim: u8, x: i32, y: i32, z: i32) -> Option<String> {
+        self.text(&HostRequest::Biome { dim, x, y, z }).ok().flatten()
+    }
+
+    /// Highest non-air block Y in a column (surface); `None` when empty.
+    pub fn height(&self, dim: u8, x: i32, z: i32) -> Option<i64> {
+        match self.request(&HostRequest::Height { dim, x, z }) {
+            HostResponse::Int { value } => value,
+            _ => None,
         }
     }
 

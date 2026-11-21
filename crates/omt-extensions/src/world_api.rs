@@ -211,6 +211,18 @@ impl UserData for LuaWorld {
             }
             Ok((Value::String(lua.create_string(&b.name)?), Value::Table(props)))
         });
+        // Biome name at (x, y, z).
+        m.add_method("biome", |_, w, (dim, x, y, z): (u8, i32, i32, i32)| {
+            let Some(c) = w.chunk(dim, x.div_euclid(16), z.div_euclid(16))? else { return Ok(None) };
+            Ok(omt_render::biome_at(&c, omt_render::Palette::embedded(), x.rem_euclid(16) as usize, y, z.rem_euclid(16) as usize).map(str::to_string))
+        });
+        // Highest non-air block Y in a column (surface).
+        m.add_method("height", |_, w, (dim, x, z): (u8, i32, i32)| {
+            let Some(c) = w.chunk(dim, x.div_euclid(16), z.div_euclid(16))? else { return Ok(None) };
+            let (lo, hi) = match dim { 1 => (0, 127), 2 => (0, 255), _ => (-64, 319) };
+            let (lx, lz) = (x.rem_euclid(16) as usize, z.rem_euclid(16) as usize);
+            Ok((lo..=hi).rev().find(|&y| c.block_at(lx, y, lz).is_some_and(|b| b.name != "minecraft:air" && !b.name.ends_with(":cave_air") && !b.name.ends_with(":void_air"))))
+        });
         // Block entities in a block rectangle; `filter` = kind substring
         // (`"chest"`, `"sign"`) or function(be) → bool.
         m.add_method("block_entities", |lua, w, (dim, x0, z0, x1, z1, filter): (u8, i32, i32, i32, i32, Value)| {
